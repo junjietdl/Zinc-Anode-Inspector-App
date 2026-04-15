@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Anode Inspector">
+  <meta name="theme-color" content="#0C447C">
+  <title>Zinc Anode Inspector</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    @keyframes fadeIn { from{opacity:0;transform:translateX(-50%) translateY(8px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
+  </style>
+</head>
+<body>
+
+<div id="app">
+  <div id="topbar">
+    <div id="topbar-title">Zinc Anode Inspector</div>
+    <div id="topbar-sub">Keel section map · All data on this device</div>
+  </div>
+
+  <div id="content"></div>
+
+  <div id="bottomnav">
+    <button class="nav-btn active" id="nav-map">
+      <svg class="ni" viewBox="0 0 24 24">
+        <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/>
+        <line x1="9" y1="3" x2="9" y2="18"/>
+        <line x1="15" y1="6" x2="15" y2="21"/>
+      </svg>
+      Keel Map
+    </button>
+    <button class="nav-btn" id="nav-inspect">
+      <svg class="ni" viewBox="0 0 24 24">
+        <path d="M9 11l3 3L22 4"/>
+        <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
+      </svg>
+      Session
+    </button>
+    <button class="nav-btn" id="nav-records">
+      <svg class="ni" viewBox="0 0 24 24">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <line x1="16" y1="13" x2="8" y2="13"/>
+        <line x1="16" y1="17" x2="8" y2="17"/>
+      </svg>
+      Records
+    </button>
+    <button class="nav-btn" id="nav-stats">
+      <svg class="ni" viewBox="0 0 24 24">
+        <line x1="18" y1="20" x2="18" y2="10"/>
+        <line x1="12" y1="20" x2="12" y2="4"/>
+        <line x1="6" y1="20" x2="6" y2="14"/>
+      </svg>
+      Analysis
+    </button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
