@@ -450,10 +450,18 @@ function showPage(p){
    ══════════════════════════════════════ */
 function renderMap(){
   document.getElementById('topbar-title').textContent='Keel Anode Map';
-  document.getElementById('topbar-sub').textContent='Click an anode to inspect · Section '+activeSection;
+  document.getElementById('topbar-sub').textContent=
+    `${SESSION.vessel||''} · ${SESSION.program||''} · Section ${activeSection}`;
 
+  // Filter inspections by current session vessel + program only
+  const filtered = inspections.filter(r=>
+    r.vessel  === SESSION.vessel &&
+    r.program === SESSION.program
+  );
+
+  // Build status from filtered records — latest record per anode wins
   const status={};
-  [...inspections].sort((a,b)=>a.id-b.id).forEach(r=>{
+  [...filtered].sort((a,b)=>a.id-b.id).forEach(r=>{
     status[r.anodeId]={verdict:r.verdict,date:r.date,inspector:r.inspector};
   });
 
@@ -477,7 +485,7 @@ function renderMap(){
       <span style="display:flex;align-items:center;gap:4px"><span class="ldot" style="background:var(--fail-bg);border-color:var(--fail-br)"></span>FAIL</span>
       <span style="display:flex;align-items:center;gap:4px"><span class="ldot" style="background:var(--warn-bg);border-color:var(--warn-br)"></span>REVIEW</span>
       <span style="display:flex;align-items:center;gap:4px"><span class="ldot" style="background:#fff;border-color:var(--gray-br)"></span>Pending</span>
-      <button id="calib-toggle" class="btn btn-sm" style="display:none"
+      <button id="calib-toggle" class="btn btn-sm"
         style="margin-left:auto;font-size:10px;padding:3px 9px;${calibrateMode?'background:var(--warn-bg);color:var(--warn);border-color:var(--warn-br)':''}"
         data-action="toggle-calibrate">${calibrateMode?'✓ Calibrating — click Done':'Calibrate positions'}</button>
     </div>
@@ -1632,7 +1640,8 @@ document.addEventListener('keydown', e => {
 
   // Redraw hotspots only (fast)
   const status2={};
-  [...inspections].sort((a,b)=>a.id-b.id).forEach(r=>{status2[r.anodeId]={verdict:r.verdict};});
+  [...inspections].filter(r=>r.vessel===SESSION.vessel&&r.program===SESSION.program)
+    .sort((a,b)=>a.id-b.id).forEach(r=>{status2[r.anodeId]={verdict:r.verdict};});
   const svg = document.getElementById('keel-hotspots');
   if (svg) svg.innerHTML = buildHotspots(activeSection, status2);
 
