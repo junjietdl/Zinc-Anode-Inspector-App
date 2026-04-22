@@ -824,8 +824,8 @@ function dots(a){
 function renderInspect(){
   document.getElementById('topbar-title').textContent = 'Inspect Anode';
   document.getElementById('topbar-sub').textContent   = INS.anodeId || 'No anode selected';
-  if(step===1)      rChecklist();
-  else if(step===2) rPhoto();
+  if(step===1)      rPhoto();
+  else if(step===2) rChecklist();
   else              rVerdict();
 }
 
@@ -833,7 +833,7 @@ function renderInspect(){
 function rChecklist(){
   const done = CHECKLIST.every(c=>INS.checklistAnswers[c.id]!==undefined);
   document.getElementById('content').innerHTML=`
-    ${dots(1)}
+    ${dots(2)}
     <div class="card" style="padding:9px 14px;margin-bottom:8px">
       <div style="font-size:13px;font-weight:700;color:var(--navy)">${INS.anodeId}</div>
       <div style="font-size:11px;color:var(--text2);margin-top:2px">
@@ -854,9 +854,9 @@ function rChecklist(){
       </div>
     </div>
     <div class="btn-row">
-      <button class="btn" data-action="show-page" data-arg="map">← Map</button>
+      <button class="btn" onclick="step=1;renderInspect()">← Photo</button>
       <button class="btn btn-primary" id="chk-next" ${done?'':'disabled'} data-action="checklist-go">
-        Next: Photo →
+        Review →
       </button>
     </div>`;
 }
@@ -905,7 +905,8 @@ function chkAnswer(id, val){
 
 function checklistGo(){
   INS.remarks = document.getElementById('f-rem')?.value || '';
-  step=2; renderInspect();
+  calcVerdict();
+  step=3; renderInspect();
 }
 
 
@@ -915,7 +916,7 @@ function rPhoto(){
   const aiDone   = !!INS.aiResult;
 
   document.getElementById('content').innerHTML=`
-    ${dots(2)}
+    ${dots(1)}
     <div class="card" style="padding:9px 14px;margin-bottom:8px">
       <div style="font-size:13px;font-weight:700;color:var(--navy)">${INS.anodeId}</div>
       <div style="font-size:11px;color:var(--text2);margin-top:2px">
@@ -973,9 +974,9 @@ function rPhoto(){
     ${aiDone ? renderAIResult(INS.aiResult) : '<div id="ai-result-slot"></div>'}
 
     <div class="btn-row">
-      <button class="btn" onclick="step=1;renderInspect()">← Checklist</button>
+      <button class="btn" data-action="show-page" data-arg="map">← Map</button>
       <button class="btn btn-primary" data-action="photo-go">
-        ${aiDone ? 'Continue →' : 'Skip AI →'}
+        ${aiDone ? 'Next: Checklist →' : 'Skip → Checklist'}
       </button>
     </div>`;
 
@@ -1205,13 +1206,8 @@ Answer: YES (secure) or NO (damaged/missing)`},
 }
 
 function photoGo(){
-  calcVerdict();
-  // If AI ran, use AI verdict as starting point (inspector can still override)
-  if(INS.aiResult){
-    INS.verdict=INS.aiResult.verdict;
-    INS.verdictReasons=[INS.aiResult.summary];
-  }
-  step=3; renderInspect();
+  // AI results already applied to checklistAnswers in runAIAnalysis
+  step=2; renderInspect();
 }
 
 /* Step 3 — Verdict */
@@ -1255,7 +1251,7 @@ function rVerdict(){
       </div>
     </div>
     <div class="btn-row">
-      <button class="btn" onclick="step=2;renderInspect()">← Photo</button>
+      <button class="btn" onclick="step=2;renderInspect()">← Checklist</button>
       <button class="btn btn-primary" data-action="save-inspection">Save</button>
       <button class="btn" data-action="print-report">Print / PDF</button>
     </div>`;
