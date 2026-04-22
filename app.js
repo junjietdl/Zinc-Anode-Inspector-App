@@ -103,6 +103,22 @@ const dbDel=id=>new Promise((res,rej)=>{const r=db.transaction('inspections','re
 /* ══════════ STATE ══════════ */
 let page='session', activeSection=1, INS={}, step=1;
 
+/* ══════════ OLLAMA CONFIG ══════════ */
+const OLLAMA_URL = 'http://localhost:11434';
+let ollamaOK = false;
+
+async function pingOllama(){
+  try{
+    const r = await fetch(OLLAMA_URL+'/api/tags',{signal:AbortSignal.timeout(2000)});
+    if(!r.ok) throw new Error();
+    const data = await r.json();
+    const models = (data.models||[]).map(m=>m.name);
+    const vision = models.filter(m=>/llava|moondream|bakllava|minicpm|cogvlm/i.test(m));
+    ollamaOK = (vision.length > 0 || models.length > 0);
+    return vision.length ? vision : models;
+  } catch{ ollamaOK=false; return []; }
+}
+
 /* ══════════ PASSWORD ══════════
    To change the password:
    1. Go to https://emn178.github.io/online-tools/sha256.html
@@ -798,18 +814,19 @@ function sessionGo(){
    ══════════════════════════════════════ */
 function dots(a){
   return`<div style="display:flex;gap:5px;align-items:center;margin-bottom:12px">
-    ${[1,2].map(i=>`<div style="height:7px;border-radius:4px;transition:.2s;
+    ${[1,2,3].map(i=>`<div style="height:7px;border-radius:4px;transition:.2s;
       background:${i<a?'#639922':i===a?'#0C447C':'#D3D1C7'};
       width:${i===a?'20px':'7px'}"></div>`).join('')}
-    <span style="font-size:11px;color:var(--text3);margin-left:5px">Step ${a} of 2</span>
+    <span style="font-size:11px;color:var(--text3);margin-left:5px">Step ${a} of 3</span>
   </div>`;
 }
 
 function renderInspect(){
   document.getElementById('topbar-title').textContent = 'Inspect Anode';
   document.getElementById('topbar-sub').textContent   = INS.anodeId || 'No anode selected';
-  if(step===1) rChecklist();
-  else         rVerdict();
+  if(step===1)      rChecklist();
+  else if(step===2) rPhoto();
+  else              rVerdict();
 }
 
 /* Step 1 — Checklist */
@@ -839,7 +856,7 @@ function rChecklist(){
     <div class="btn-row">
       <button class="btn" data-action="show-page" data-arg="map">← Map</button>
       <button class="btn btn-primary" id="chk-next" ${done?'':'disabled'} data-action="checklist-go">
-        Review →
+        Next: Photo →
       </button>
     </div>`;
 }
@@ -888,18 +905,322 @@ function chkAnswer(id, val){
 
 function checklistGo(){
   INS.remarks = document.getElementById('f-rem')?.value || '';
-  calcVerdict();
   step=2; renderInspect();
 }
 
 
-/* Step 2 — Verdict */
+/* Step 2 — Photo analysis (optional) */
+function rPhoto(){
+  const hasPhoto = !!INS.photoB64;
+  const aiDone   = !!INS.aiResult;
+
+  document.getElementById('content').innerHTML=`
+    ${dots(2)}
+    <div class="card" style="padding:9px 14px;margin-bottom:8px">
+      <div style="font-size:13px;font-weight:700;color:var(--navy)">${INS.anodeId}</div>
+      <div style="font-size:11px;color:var(--text2);margin-top:2px">
+        Section ${INS.section} · ${INS.side} · ${SESSION.vessel}
+      </div>
+    </div>
+
+    <!-- Ollama status -->
+    <div class="card" style="padding:9px 14px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:12px;color:var(--text2)">
+          <span id="ai-dot" style="width:8px;height:8px;border-radius:50%;background:#ccc;display:inline-block;margin-right:5px;vertical-align:middle"></span>
+          <span id="ai-status">Checking Ollama…</span>
+        </div>
+        <span style="font-size:10px;color:var(--text3)">Optional — skip if not available</span>
+      </div>
+      <div id="ai-model-row" style="display:none;margin-top:8px">
+        <select id="ai-model" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--white)"></select>
+      </div>
+    </div>
+
+    <!-- Photo upload -->
+    <div class="card">
+      <div class="card-title">Anode photo</div>
+      <div id="upload-zone" style="border:2px dashed var(--gray-br);border-radius:var(--rs);padding:20px;text-align:center;cursor:pointer;background:var(--gray-lt)"
+           onclick="document.getElementById('photo-file').click()">
+        <div style="font-size:24px;margin-bottom:5px">📷</div>
+        <div style="font-size:13px;color:var(--text2);font-weight:600">Tap to capture or upload photo</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Include a ruler if possible</div>
+      </div>
+      <input type="file" id="photo-file" accept="image/*" capture="environment"
+             style="display:none" onchange="onInspPhoto(this)">
+      ${hasPhoto?`<img id="photo-preview" src="${INS.photoPreview}"
+        style="width:100%;max-height:220px;object-fit:contain;border-radius:var(--rs);margin-top:10px;border:1px solid var(--border)">`
+        :'<img id="photo-preview" style="display:none;width:100%;max-height:220px;object-fit:contain;border-radius:var(--rs);margin-top:10px">'}
+    </div>
+
+    <!-- AI analyse button -->
+    <button class="btn btn-primary" id="ai-analyse-btn"
+            onclick="runAIAnalysis()" ${hasPhoto&&ollamaOK?'':'disabled'}
+            style="margin-bottom:8px">
+      Analyse with AI
+    </button>
+
+    <!-- Progress -->
+    <div id="ai-progress" style="display:none" class="card">
+      <div style="font-size:13px;font-weight:600;color:var(--navy)" id="ai-prog-label">Analysing…</div>
+      <div style="height:6px;background:var(--gray-lt);border-radius:3px;overflow:hidden;margin-top:8px">
+        <div id="ai-prog-fill" style="height:100%;background:var(--navy);border-radius:3px;width:0%;transition:width .4s"></div>
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:5px">May take 30–90 seconds</div>
+    </div>
+
+    <!-- AI result (shown after analysis) -->
+    ${aiDone ? renderAIResult(INS.aiResult) : '<div id="ai-result-slot"></div>'}
+
+    <div class="btn-row">
+      <button class="btn" onclick="step=1;renderInspect()">← Checklist</button>
+      <button class="btn btn-primary" data-action="photo-go">
+        ${aiDone ? 'Continue →' : 'Skip AI →'}
+      </button>
+    </div>`;
+
+  // Check Ollama
+  pingOllama().then(models=>{
+    const dot = document.getElementById('ai-dot');
+    const st  = document.getElementById('ai-status');
+    const mr  = document.getElementById('ai-model-row');
+    const btn = document.getElementById('ai-analyse-btn');
+    if(!dot) return;
+    if(ollamaOK && models.length){
+      dot.style.background='#97C459';
+      st.textContent='Ollama ready — AI analysis available';
+      mr.style.display='block';
+      const sel = document.getElementById('ai-model');
+      if(sel) sel.innerHTML = models.map(m=>`<option value="${m}" ${/llava/i.test(m)?'selected':''}>${m}</option>`).join('');
+      if(btn && INS.photoB64) btn.disabled=false;
+    } else {
+      dot.style.background='#F09595';
+      st.textContent='Ollama not running — skip or run: ollama serve';
+      if(btn) btn.disabled=true;
+    }
+  });
+}
+
+function renderAIResult(r){
+  if(!r) return '<div id="ai-result-slot"></div>';
+  const v=r.verdict||'?';
+  const vc=v==='PASS'?'var(--pass)':v==='FAIL'?'var(--fail)':'var(--warn)';
+  const vbg=v==='PASS'?'var(--pass-bg)':v==='FAIL'?'var(--fail-bg)':'var(--warn-bg)';
+  const checks=[
+    {k:'c1_remaining_50pct',l:'≥50% remaining',   crit:true},
+    {k:'c2_no_core_exposed',l:'No core exposed',   crit:true},
+    {k:'c3_no_knife_edge',  l:'No knife-edge',      crit:true},
+    {k:'c4_surface_acceptable',l:'Surface OK',      crit:false},
+    {k:'c5_mounting_secure',   l:'Mounting secure', crit:false},
+  ];
+  const chips = checks.map(c=>{
+    const val=r[c.k];
+    const bg=val===true?'var(--pass-bg)':val===false?'var(--fail-bg)':'var(--gray-lt)';
+    const col=val===true?'var(--pass)':val===false?'var(--fail)':'var(--text3)';
+    return`<span style="background:${bg};color:${col};font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;display:inline-block;margin:2px">${c.l}: ${val===true?'✓':val===false?'✗':'?'}</span>`;
+  }).join('');
+  return`<div id="ai-result-slot">
+    <div class="card" style="background:${vbg};border-color:${vc}">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <div style="width:36px;height:36px;border-radius:50%;background:${vc};color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0">${v==='PASS'?'✓':v==='FAIL'?'✗':'!'}</div>
+        <div>
+          <div style="font-size:16px;font-weight:800;color:${vc}">${v}</div>
+          <div style="font-size:11px;color:${vc};margin-top:1px">${r.summary||''}</div>
+        </div>
+      </div>
+      <div style="margin-bottom:6px">${chips}</div>
+      ${r.observations?`<div style="font-size:11px;color:var(--text2);margin-top:6px;line-height:1.5">${r.observations.split('\n')[0]||''}</div>`:''}
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:8px;text-align:center">
+      AI suggestion — review checklist on previous step if needed
+    </div>
+  </div>`;
+}
+
+function onInspPhoto(input){
+  const file=input.files[0]; if(!file) return;
+  const img=new Image(), url=URL.createObjectURL(file);
+  img.onload=()=>{
+    const MAX=1200; let w=img.width,h=img.height;
+    if(w>MAX){h=Math.round(h*MAX/w);w=MAX;}
+    const c=document.createElement('canvas');
+    c.width=w;c.height=h;
+    c.getContext('2d').drawImage(img,0,0,w,h);
+    INS.photoB64=c.toDataURL('image/jpeg',.88).split(',')[1];
+    INS.photoPreview=c.toDataURL('image/jpeg',.88);
+    URL.revokeObjectURL(url);
+    const pv=document.getElementById('photo-preview');
+    if(pv){pv.src=INS.photoPreview;pv.style.display='block';}
+    const uz=document.getElementById('upload-zone');
+    if(uz) uz.style.borderStyle='solid';
+    const btn=document.getElementById('ai-analyse-btn');
+    if(btn&&ollamaOK) btn.disabled=false;
+  };
+  img.src=url;
+}
+
+async function runAIAnalysis(){
+  const model = document.getElementById('ai-model')?.value;
+  if(!model||!INS.photoB64) return;
+
+  const btn  = document.getElementById('ai-analyse-btn');
+  const prog = document.getElementById('ai-progress');
+  const fill = document.getElementById('ai-prog-fill');
+  if(btn)  btn.disabled=true;
+  if(prog) prog.style.display='block';
+
+  const questions=[
+    {key:'c1_remaining_50pct',inverted:false,prompt:`You are inspecting a sacrificial zinc anode on a ship's hull.
+
+CRITICAL QUESTION: Is at least 50% of the zinc anode material STILL REMAINING?
+
+A BRAND NEW anode is a THICK, SOLID, OVAL/ELLIPTICAL zinc block — like a large solid egg shape. Approximately 13cm wide x 10cm tall x 5cm thick when new.
+
+Signs that LESS THAN 50% remains (answer NO):
+- The anode looks thin, flat, skeletal or like a thin shell
+- You can clearly see the steel mounting rod/bracket running through the middle because the zinc has worn away around it
+- The overall shape looks like a thin plate or blade rather than a solid oval block
+- Orange rust or bare metal is visible on the main body
+- The zinc body is dramatically smaller than a solid egg shape
+- Most of the original zinc volume is clearly gone
+
+Signs that MORE THAN 50% remains (answer YES):
+- The anode is still a recognisably thick, solid, chunky oval shape
+- Still looks like more than half of the original solid block is present
+- Zinc body still dominates over the steel hardware
+
+Be STRICT and CONSERVATIVE — if you are unsure, answer NO.
+Answer with ONLY one word: YES or NO`},
+    {key:'c2_no_core_exposed',inverted:true,prompt:`You are inspecting a sacrificial zinc anode on a ship's hull.
+
+QUESTION: Is the steel core or metal insert EXPOSED or visible through the zinc body?
+
+The mounting brackets at the very top and bottom ends are NORMAL.
+What is NOT normal: orange/rust-coloured or bare steel areas showing THROUGH the zinc body itself — meaning zinc has worn away to expose underlying metal.
+
+Answer with ONLY one word:
+YES — if steel/rust/core IS exposed through the zinc body
+NO — if zinc body is intact with no core exposure`},
+    {key:'c3_no_knife_edge',inverted:true,prompt:`You are inspecting a sacrificial zinc anode on a ship's hull.
+
+QUESTION: Has the anode worn into a knife-edge, spike, or dangerously thin sharp shape?
+
+A GOOD anode is a solid rounded oval shape.
+A DANGEROUS anode: thin blade, pointed spike, extremely thin jagged shapes that could break off.
+
+Answer with ONLY one word:
+YES — knife-edge or spike IS present
+NO — shape is acceptable`},
+    {key:'c4_surface_acceptable',inverted:false,prompt:`You are inspecting a sacrificial zinc anode.
+Is the surface condition acceptable? Normal pitting and rough grey/silver texture is fine.
+Unacceptable: extreme deep pitting, large chunks missing, severe cracking across most of the surface.
+Answer: YES (acceptable) or NO (unacceptable)`},
+    {key:'c5_mounting_secure',inverted:false,prompt:`You are inspecting a sacrificial zinc anode.
+Do the mounting brackets appear secure and intact? If unclear, answer YES.
+Answer: YES (secure) or NO (damaged/missing)`},
+  ];
+
+  const answers={};
+  let pct=5;
+  const ticker=setInterval(()=>{
+    pct=Math.min(pct+(pct<80?3:0.5),92);
+    if(fill) fill.style.width=pct+'%';
+  },600);
+
+  try{
+    for(const q of questions){
+      document.getElementById('ai-prog-label').textContent='Checking: '+q.key.replace(/_/g,' ')+'…';
+      const r=await fetch(OLLAMA_URL+'/api/generate',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model,prompt:q.prompt,images:[INS.photoB64],stream:false,options:{temperature:0.01,num_predict:10}}),
+        signal:AbortSignal.timeout(60000)
+      });
+      const data=await r.json();
+      const resp=(data.response||'').trim().toLowerCase();
+      const positive=/yes|good|ok|acceptable|intact|secure|remaining|sufficient/i.test(resp);
+      answers[q.key] = q.inverted ? !positive : positive;
+    }
+
+    // Consistency check
+    if(!answers.c2_no_core_exposed||!answers.c3_no_knife_edge){
+      answers.c1_remaining_50pct=false;
+    }
+
+    // Percentage from checklist logic
+    let estPct;
+    if(!answers.c1_remaining_50pct&&!answers.c2_no_core_exposed&&!answers.c3_no_knife_edge) estPct=10;
+    else if(!answers.c1_remaining_50pct&&!answers.c2_no_core_exposed) estPct=20;
+    else if(!answers.c1_remaining_50pct&&!answers.c3_no_knife_edge)   estPct=15;
+    else if(!answers.c2_no_core_exposed) estPct=30;
+    else if(!answers.c1_remaining_50pct) estPct=35;
+    else if(!answers.c3_no_knife_edge)   estPct=20;
+    else estPct=70;
+
+    // Verdict
+    const f1=!answers.c1_remaining_50pct,f2=!answers.c2_no_core_exposed,f3=!answers.c3_no_knife_edge;
+    const soft=!answers.c4_surface_acceptable||!answers.c5_mounting_secure;
+    let verdict,summary;
+    if(f1||f2||f3){
+      verdict='FAIL';
+      const reasons=[];
+      if(f1)reasons.push('remaining<50%');
+      if(f2)reasons.push('core exposed');
+      if(f3)reasons.push('knife-edge');
+      summary='Critical failure: '+reasons.join(', ')+' (~'+estPct+'% remaining)';
+    } else if(soft){
+      verdict='REVIEW REQUIRED';
+      summary='Advisory items need attention (~'+estPct+'% remaining)';
+    } else {
+      verdict='PASS';
+      summary='All criteria satisfied — approximately '+estPct+'% remaining';
+    }
+
+    INS.aiResult={...answers,estimated_remaining_pct:estPct,verdict,summary,
+      observations:Object.entries(answers).map(([k,v])=>k.replace(/_/g,' ')+': '+(v?'PASS':'FAIL')).join('\n')};
+
+    // Apply AI answers to checklist (inspector can still override)
+    INS.checklistAnswers.c1=answers.c1_remaining_50pct;
+    INS.checklistAnswers.c2=answers.c2_no_core_exposed;
+    INS.checklistAnswers.c3=answers.c3_no_knife_edge;
+    INS.checklistAnswers.c4=answers.c4_surface_acceptable;
+    INS.checklistAnswers.c5=answers.c5_mounting_secure;
+
+    clearInterval(ticker);
+    if(fill) fill.style.width='100%';
+    setTimeout(()=>{
+      if(prog) prog.style.display='none';
+      const slot=document.getElementById('ai-result-slot');
+      if(slot) slot.outerHTML=renderAIResult(INS.aiResult);
+      const goBtn=document.querySelector('[data-action="photo-go"]');
+      if(goBtn) goBtn.textContent='Continue →';
+    },300);
+
+  }catch(err){
+    clearInterval(ticker);
+    if(prog) prog.style.display='none';
+    if(btn) btn.disabled=false;
+    showToast('AI analysis failed: '+err.message,'error');
+  }
+}
+
+function photoGo(){
+  calcVerdict();
+  // If AI ran, use AI verdict as starting point (inspector can still override)
+  if(INS.aiResult){
+    INS.verdict=INS.aiResult.verdict;
+    INS.verdictReasons=[INS.aiResult.summary];
+  }
+  step=3; renderInspect();
+}
+
+/* Step 3 — Verdict */
 function rVerdict(){
   const v=INS.verdict;
   const vc=v==='PASS'?'var(--pass)':v==='FAIL'?'var(--fail)':'var(--warn)';
   const vbg=v==='PASS'?'var(--pass-bg)':v==='FAIL'?'var(--fail-bg)':'var(--warn-bg)';
   document.getElementById('content').innerHTML=`
-    ${dots(2)}
+    ${dots(3)}
     <div class="vbanner" style="background:${vbg}">
       <div class="vicon" style="background:${vc}">${v==='PASS'?'✓':v==='FAIL'?'✗':'!'}</div>
       <div>
@@ -934,7 +1255,7 @@ function rVerdict(){
       </div>
     </div>
     <div class="btn-row">
-      <button class="btn" data-action="go-back-checklist">← Checklist</button>
+      <button class="btn" onclick="step=2;renderInspect()">← Photo</button>
       <button class="btn btn-primary" data-action="save-inspection">Save</button>
       <button class="btn" data-action="print-report">Print / PDF</button>
     </div>`;
@@ -1578,6 +1899,7 @@ document.addEventListener('click', e => {
   if (action === 'print-single')      printSingle(arg);
   if (action === 'session-go')        sessionGo();
   if (action === 'checklist-go')      checklistGo();
+  if (action === 'photo-go')          photoGo();
   if (action === 'chk-answer')        { const[cid,val]=arg.split(','); chkAnswer(cid,val); }
   if (action === 'override-verdict')  { INS.verdict=arg; INS.verdictReasons=['Manually overridden']; rVerdict(); }
   if (action === 'go-back-checklist') { step=1; renderInspect(); }
