@@ -102,6 +102,21 @@ const dbDel=id=>new Promise((res,rej)=>{const r=db.transaction('inspections','re
 
 /* ══════════ STATE ══════════ */
 let page='session', activeSection=1, INS={}, step=1;
+const OLLAMA_URL = 'http://localhost:11434';
+let ollamaOK = false;
+let ollamaModels = [];
+
+async function pingOllama(){
+  try{
+    const r=await fetch(OLLAMA_URL+'/api/tags',{signal:AbortSignal.timeout(2000)});
+    const d=await r.json();
+    const all=(d.models||[]).map(m=>m.name);
+    const vision=all.filter(m=>/llava|moondream|bakllava|minicpm|cogvlm/i.test(m));
+    ollamaModels = vision.length ? vision : all;
+    ollamaOK = ollamaModels.length > 0;
+  } catch { ollamaOK=false; ollamaModels=[]; }
+  return ollamaModels;
+}
 
 
 
@@ -877,21 +892,340 @@ function sessionGo(){
    ══════════════════════════════════════ */
 function dots(a){
   return`<div style="display:flex;gap:5px;align-items:center;margin-bottom:12px">
-    ${[1,2].map(i=>`<div style="height:7px;border-radius:4px;transition:.2s;
+    ${[1,2,3].map(i=>`<div style="height:7px;border-radius:4px;transition:.2s;
       background:${i<a?'#639922':i===a?'#0C447C':'#D3D1C7'};
       width:${i===a?'20px':'7px'}"></div>`).join('')}
-    <span style="font-size:11px;color:var(--text3);margin-left:5px">Step ${a} of 2</span>
+    <span style="font-size:11px;color:var(--text3);margin-left:5px">Step ${a} of 3</span>
   </div>`;
 }
 
 function renderInspect(){
   document.getElementById('topbar-title').textContent = 'Inspect Anode';
   document.getElementById('topbar-sub').textContent   = INS.anodeId || 'No anode selected';
-  if(step===1) rChecklist();
-  else         rVerdict();
+  if(step===1)      rPhoto();
+  else if(step===2) rChecklist();
+  else              rVerdict();
 }
 
-/* Step 1 — Checklist */
+/* Step 1 — Photo + Ollama AI analysis */
+function rPhoto(){
+  const hasPhoto = !!INS.photoB64;
+  const aiDone   = !!INS.aiResult;
+
+  document.getElementById('content').innerHTML=`
+    ${dots(1)}
+    <div class="card" style="padding:9px 14px;margin-bottom:8px">
+      <div style="font-size:13px;font-weight:700;color:var(--navy)">${INS.anodeId}</div>
+      <div style="font-size:11px;color:var(--text2);margin-top:2px">
+        Section ${INS.section} · ${INS.side} · ${SESSION.vessel} · ${SESSION.program}
+      </div>
+    </div>
+
+    <!-- Ollama status -->
+    <div class="card" style="padding:9px 14px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
+        <div style="font-size:12px;color:var(--text2)">
+          <span id="ai-dot" style="width:8px;height:8px;border-radius:50%;background:#ccc;
+            display:inline-block;margin-right:5px;vertical-align:middle"></span>
+          <span id="ai-status">Checking Ollama…</span>
+        </div>
+        <span style="font-size:10px;color:var(--text3)">Optional — skip if not available</span>
+      </div>
+      <div id="ai-model-row" style="display:none;margin-top:8px">
+        <select id="ai-model" style="width:100%;padding:7px 10px;border:1px solid var(--border);
+          border-radius:var(--rs);font-size:12px;background:var(--white)"></select>
+      </div>
+      <div id="ollama-hint" class="hidden" style="margin-top:8px;font-size:11px;color:var(--text3);
+        background:var(--gray-lt);border-radius:var(--rs);padding:7px 10px;line-height:1.6">
+        To enable AI: run <code style="background:rgba(0,0,0,.07);padding:1px 5px;border-radius:3px">ollama serve</code>
+        in Terminal, then refresh this page.
+        Pull a model first: <code style="background:rgba(0,0,0,.07);padding:1px 5px;border-radius:3px">ollama pull llava</code>
+      </div>
+    </div>
+
+    <!-- Photo upload -->
+    <div class="card">
+      <div class="card-title">Anode photo</div>
+      <div id="upload-zone" onclick="document.getElementById('photo-file').click()"
+        style="border:2px dashed ${hasPhoto?'var(--navy)':'var(--gray-br)'};
+          border-style:${hasPhoto?'solid':'dashed'};
+          border-radius:var(--rs);padding:20px;text-align:center;
+          cursor:pointer;background:var(--gray-lt)">
+        <div style="font-size:26px;margin-bottom:5px">📷</div>
+        <div style="font-size:13px;color:var(--text2);font-weight:600">
+          ${hasPhoto?'Tap to replace photo':'Tap to capture or upload'}
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Include a ruler if possible</div>
+      </div>
+      <input type="file" id="photo-file" accept="image/*" capture="environment"
+        style="display:none" onchange="onInspPhoto(this)">
+      ${hasPhoto
+        ?`<img src="${INS.photoPreview}" style="width:100%;max-height:220px;object-fit:contain;
+            border-radius:var(--rs);margin-top:10px;border:1px solid var(--border)">`
+        :''}
+    </div>
+
+    <!-- AI analyse button -->
+    <button class="btn btn-primary" id="ai-analyse-btn"
+      onclick="runAIAnalysis()" ${hasPhoto&&ollamaOK?'':'disabled'} style="margin-bottom:8px">
+      Analyse with AI (Ollama)
+    </button>
+
+    <!-- Progress -->
+    <div id="ai-progress" style="display:none" class="card">
+      <div style="font-size:13px;font-weight:600;color:var(--navy)" id="ai-prog-label">Analysing…</div>
+      <div style="height:6px;background:var(--gray-lt);border-radius:3px;overflow:hidden;margin-top:8px">
+        <div id="ai-prog-fill" style="height:100%;background:var(--navy);border-radius:3px;width:0%;transition:width .4s"></div>
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:5px">May take 30–90 seconds</div>
+    </div>
+
+    <!-- AI result -->
+    <div id="ai-result-slot">
+      ${aiDone ? renderAIResult(INS.aiResult) : ''}
+    </div>
+
+    <div class="btn-row">
+      <button class="btn" data-action="show-page" data-arg="map">← Map</button>
+      <button class="btn btn-primary" onclick="step=2;renderInspect()">
+        ${aiDone?'Next: Checklist →':'Skip → Checklist'}
+      </button>
+    </div>`;
+
+  // Ping Ollama
+  pingOllama().then(models=>{
+    const dot=document.getElementById('ai-dot');
+    const st =document.getElementById('ai-status');
+    const mr =document.getElementById('ai-model-row');
+    const hint=document.getElementById('ollama-hint');
+    const btn=document.getElementById('ai-analyse-btn');
+    if(!dot) return;
+    if(ollamaOK && models.length){
+      dot.style.background='#97C459';
+      st.textContent='Ollama ready — '+models[0];
+      mr.style.display='block';
+      const sel=document.getElementById('ai-model');
+      if(sel) sel.innerHTML=models.map(m=>`<option value="${m}" ${/llava/i.test(m)?'selected':''}>${m}</option>`).join('');
+      if(btn && INS.photoB64) btn.disabled=false;
+    } else {
+      dot.style.background='#F09595';
+      st.textContent='Ollama not running — skip or start Ollama';
+      if(hint) hint.classList.remove('hidden');
+      if(btn) btn.disabled=true;
+    }
+  });
+}
+
+function renderAIResult(r){
+  if(!r) return '';
+  const v=r.verdict||'?';
+  const vc=v==='PASS'?'var(--pass)':v==='FAIL'?'var(--fail)':'var(--warn)';
+  const vbg=v==='PASS'?'var(--pass-bg)':v==='FAIL'?'var(--fail-bg)':'var(--warn-bg)';
+  const checks=[
+    {k:'c1_remaining_50pct',l:'≥50% remaining',  crit:true},
+    {k:'c2_no_core_exposed',l:'No core exposed',  crit:true},
+    {k:'c3_no_knife_edge',  l:'No knife-edge',    crit:true},
+    {k:'c4_surface_acceptable',l:'Surface OK',    crit:false},
+    {k:'c5_mounting_secure',   l:'Mounting OK',   crit:false},
+  ];
+  const chips=checks.map(c=>{
+    const val=r[c.k];
+    const bg=val===true?'var(--pass-bg)':val===false?'var(--fail-bg)':'var(--gray-lt)';
+    const col=val===true?'var(--pass)':val===false?'var(--fail)':'var(--text3)';
+    return`<span style="background:${bg};color:${col};font-size:10px;font-weight:700;
+      padding:2px 7px;border-radius:20px;display:inline-block;margin:2px">
+      ${c.l}: ${val===true?'✓':val===false?'✗':'?'}
+    </span>`;
+  }).join('');
+  return`<div class="card" style="background:${vbg};border-color:${vc};margin-bottom:8px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <div style="width:36px;height:36px;border-radius:50%;background:${vc};color:#fff;
+        display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0">
+        ${v==='PASS'?'✓':v==='FAIL'?'✗':'!'}
+      </div>
+      <div>
+        <div style="font-size:16px;font-weight:800;color:${vc}">${v}</div>
+        <div style="font-size:11px;color:${vc};margin-top:1px">${r.summary||''}</div>
+      </div>
+    </div>
+    <div>${chips}</div>
+    ${r.observations?`<div style="font-size:11px;color:var(--text2);margin-top:8px;line-height:1.5">${r.observations.split('\n')[0]||''}</div>`:''}
+    <div style="font-size:10px;color:var(--text3);margin-top:6px">AI suggestion · Checklist pre-filled · Review on next step</div>
+  </div>`;
+}
+
+function onInspPhoto(input){
+  const file=input.files[0]; if(!file) return;
+  const img=new Image(), url=URL.createObjectURL(file);
+  img.onload=()=>{
+    const MAX=1200; let w=img.width,h=img.height;
+    if(w>MAX){h=Math.round(h*MAX/w);w=MAX;}
+    const c=document.createElement('canvas');
+    c.width=w;c.height=h;
+    c.getContext('2d').drawImage(img,0,0,w,h);
+    INS.photoB64=c.toDataURL('image/jpeg',.88).split(',')[1];
+    INS.photoPreview=c.toDataURL('image/jpeg',.88);
+    URL.revokeObjectURL(url);
+    // Re-render photo step to show preview and enable analyse btn
+    rPhoto();
+  };
+  img.src=url;
+}
+
+async function runAIAnalysis(){
+  const model=document.getElementById('ai-model')?.value;
+  if(!model||!INS.photoB64) return;
+
+  const btn =document.getElementById('ai-analyse-btn');
+  const prog=document.getElementById('ai-progress');
+  const fill=document.getElementById('ai-prog-fill');
+  if(btn)  btn.disabled=true;
+  if(prog) prog.style.display='block';
+
+  const questions=[
+    {key:'c1_remaining_50pct',inverted:false,prompt:`You are inspecting a sacrificial zinc anode on a ship's hull.
+
+CRITICAL QUESTION: Is at least 50% of the zinc anode material STILL REMAINING?
+
+A BRAND NEW anode is a THICK, SOLID, OVAL/ELLIPTICAL zinc block approximately 13cm wide x 10cm tall x 5cm thick.
+
+Signs LESS THAN 50% remains (answer NO):
+- Anode looks thin, flat, skeletal or like a thin shell
+- Steel mounting rod/bracket visible through the zinc body
+- Shape looks like a thin plate rather than solid oval block
+- Orange rust or bare metal visible on the main body
+- Most of the original zinc volume is clearly gone
+
+Signs MORE THAN 50% remains (answer YES):
+- Still a recognisably thick, solid, chunky oval shape
+- More than half of original solid block is present
+- Zinc body dominates over the steel hardware
+
+Be STRICT — if unsure, answer NO.
+Answer with ONLY one word: YES or NO`},
+    {key:'c2_no_core_exposed',inverted:true,prompt:`You are inspecting a sacrificial zinc anode on a ship's hull.
+
+QUESTION: Is the steel core or metal insert EXPOSED through the zinc body?
+
+Brackets at the very top and bottom ends are NORMAL.
+NOT normal: orange/rust/bare steel showing THROUGH the zinc body itself.
+
+Answer ONLY:
+YES — steel/rust/core IS exposed through the zinc body
+NO — zinc body intact, no core exposure`},
+    {key:'c3_no_knife_edge',inverted:true,prompt:`You are inspecting a sacrificial zinc anode on a ship's hull.
+
+QUESTION: Has the anode worn into a knife-edge, spike, or dangerously thin sharp shape?
+
+Good anode = solid rounded oval shape.
+Dangerous = thin blade, pointed spike, extremely thin jagged shapes.
+
+Answer ONLY:
+YES — knife-edge or spike IS present (DANGEROUS)
+NO — shape is acceptable`},
+    {key:'c4_surface_acceptable',inverted:false,prompt:`Inspecting a zinc anode. Is the surface condition acceptable?
+Normal pitting and rough grey/silver texture is fine.
+Unacceptable: extreme deep pitting, large chunks missing, severe cracking.
+Answer: YES (acceptable) or NO (unacceptable)`},
+    {key:'c5_mounting_secure',inverted:false,prompt:`Inspecting a zinc anode. Do the mounting brackets appear secure and intact?
+If unclear, answer YES.
+Answer: YES (secure) or NO (damaged/missing)`},
+  ];
+
+  const answers={};
+  let pct=5;
+  const ticker=setInterval(()=>{
+    pct=Math.min(pct+(pct<80?3:0.5),92);
+    if(fill) fill.style.width=pct+'%';
+    const lbl=document.getElementById('ai-prog-label');
+    if(lbl){
+      if(pct<30)      lbl.textContent='Sending photo to Ollama…';
+      else if(pct<60) lbl.textContent='Assessing anode condition…';
+      else            lbl.textContent='Generating assessment…';
+    }
+  },600);
+
+  try{
+    for(const q of questions){
+      const lbl=document.getElementById('ai-prog-label');
+      if(lbl) lbl.textContent='Checking: '+q.key.replace(/_/g,' ')+'…';
+      const r=await fetch(OLLAMA_URL+'/api/generate',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model,prompt:q.prompt,images:[INS.photoB64],
+          stream:false,options:{temperature:0.01,num_predict:10}}),
+        signal:AbortSignal.timeout(60000)
+      });
+      const data=await r.json();
+      const resp=(data.response||'').trim().toLowerCase();
+      const positive=/yes|good|ok|acceptable|intact|secure|remaining|sufficient/i.test(resp);
+      answers[q.key]=q.inverted?!positive:positive;
+    }
+
+    // Consistency: core exposed or knife-edge → remaining must be <50%
+    if(!answers.c2_no_core_exposed||!answers.c3_no_knife_edge){
+      answers.c1_remaining_50pct=false;
+    }
+
+    // Percentage from logic
+    let estPct;
+    if(!answers.c1_remaining_50pct&&!answers.c2_no_core_exposed&&!answers.c3_no_knife_edge) estPct=10;
+    else if(!answers.c1_remaining_50pct&&!answers.c2_no_core_exposed) estPct=20;
+    else if(!answers.c1_remaining_50pct&&!answers.c3_no_knife_edge)   estPct=15;
+    else if(!answers.c2_no_core_exposed) estPct=30;
+    else if(!answers.c1_remaining_50pct) estPct=35;
+    else if(!answers.c3_no_knife_edge)   estPct=20;
+    else estPct=70;
+
+    // Verdict
+    const f1=!answers.c1_remaining_50pct,f2=!answers.c2_no_core_exposed,f3=!answers.c3_no_knife_edge;
+    const soft=!answers.c4_surface_acceptable||!answers.c5_mounting_secure;
+    let verdict,summary;
+    if(f1||f2||f3){
+      verdict='FAIL';
+      const reasons=[];
+      if(f1)reasons.push('remaining<50%');
+      if(f2)reasons.push('core exposed');
+      if(f3)reasons.push('knife-edge');
+      summary='Critical failure: '+reasons.join(', ')+' (~'+estPct+'% remaining)';
+    } else if(soft){
+      verdict='REVIEW REQUIRED';
+      summary='Advisory items need attention (~'+estPct+'% remaining)';
+    } else {
+      verdict='PASS';
+      summary='All criteria satisfied — approximately '+estPct+'% remaining';
+    }
+
+    INS.aiResult={...answers,estimated_remaining_pct:estPct,verdict,summary,
+      observations:Object.entries(answers).map(([k,v])=>k.replace(/_/g,' ')+': '+(v?'PASS':'FAIL')).join('\n')};
+
+    // Pre-fill checklist answers from AI
+    INS.checklistAnswers.c1=answers.c1_remaining_50pct;
+    INS.checklistAnswers.c2=answers.c2_no_core_exposed;
+    INS.checklistAnswers.c3=answers.c3_no_knife_edge;
+    INS.checklistAnswers.c4=answers.c4_surface_acceptable;
+    INS.checklistAnswers.c5=answers.c5_mounting_secure;
+
+    clearInterval(ticker);
+    if(fill) fill.style.width='100%';
+    setTimeout(()=>{
+      if(prog) prog.style.display='none';
+      if(btn)  btn.disabled=false;
+      const slot=document.getElementById('ai-result-slot');
+      if(slot) slot.innerHTML=renderAIResult(INS.aiResult);
+      const skipBtn=document.querySelector('.btn-primary[onclick*="step=2"]');
+      if(skipBtn) skipBtn.textContent='Next: Checklist →';
+    },300);
+
+  } catch(err){
+    clearInterval(ticker);
+    if(prog) prog.style.display='none';
+    if(btn)  btn.disabled=false;
+    showToast('AI failed: '+err.message,'error');
+  }
+}
+
+/* Step 2 — Checklist */
 function rChecklist(){
   const done = CHECKLIST.every(c=>INS.checklistAnswers[c.id]!==undefined);
   document.getElementById('content').innerHTML=`
@@ -968,7 +1302,7 @@ function chkAnswer(id, val){
 function checklistGo(){
   INS.remarks = document.getElementById('f-rem')?.value || '';
   calcVerdict();
-  step=2; renderInspect();
+  step=3; renderInspect();
 }
 
 
@@ -979,7 +1313,7 @@ function rVerdict(){
   const vc=v==='PASS'?'var(--pass)':v==='FAIL'?'var(--fail)':'var(--warn)';
   const vbg=v==='PASS'?'var(--pass-bg)':v==='FAIL'?'var(--fail-bg)':'var(--warn-bg)';
   document.getElementById('content').innerHTML=`
-    ${dots(2)}
+    ${dots(3)}
     <div class="vbanner" style="background:${vbg}">
       <div class="vicon" style="background:${vc}">${v==='PASS'?'✓':v==='FAIL'?'✗':'!'}</div>
       <div>
@@ -1014,7 +1348,7 @@ function rVerdict(){
       </div>
     </div>
     <div class="btn-row">
-      <button class="btn" data-action="go-back-checklist">← Checklist</button>
+      <button class="btn" onclick="step=2;renderInspect()">← Checklist</button>
       <button class="btn btn-primary" data-action="save-inspection">Save</button>
       <button class="btn" data-action="print-report">Print / PDF</button>
     </div>`;
@@ -1859,14 +2193,35 @@ async function loadDemoData(){
     'Maintenance Program 4': ['15 Oct 2026','16 Oct 2026','17 Oct 2026','18 Oct 2026','19 Oct 2026'],
   };
 
-  // Verdict pattern per vessel — gives each vessel a distinct inspection story
-  // [failEvery, reviewEvery] — e.g. [7,4] means fail every 7th, review every 4th
-  const VESSEL_PATTERNS = {
-    'Vessel A': {failEvery:8, reviewEvery:5},   // best condition
-    'Vessel B': {failEvery:6, reviewEvery:4},   // moderate
-    'Vessel C': {failEvery:5, reviewEvery:3},   // more issues
-    'Vessel D': {failEvery:4, reviewEvery:3},   // most issues
+  // Fail rate per vessel — randomised but each vessel has a distinct tendency
+  const VESSEL_FAIL_RATE = {
+    'Vessel A': 0.10,  // ~10% fail rate (best)
+    'Vessel B': 0.18,  // ~18%
+    'Vessel C': 0.25,  // ~25%
+    'Vessel D': 0.35,  // ~35% (worst)
   };
+
+  // Seeded random using vessel+program+anodeId for reproducibility
+  function seededRand(seed){
+    let x = Math.sin(seed) * 10000;
+    return x - Math.floor(x);
+  }
+  function strHash(s){
+    let h=0; for(let i=0;i<s.length;i++) h=(Math.imul(31,h)+s.charCodeAt(i))|0;
+    return Math.abs(h);
+  }
+  function randomVerdict(vessel, program, anodeId, section){
+    const failRate   = VESSEL_FAIL_RATE[vessel] || 0.15;
+    const reviewRate = failRate * 0.5; // review ≈ half of fail rate
+    // Add section weight — later sections slightly higher fail rate
+    const secWeight  = 1 + (section-1)*0.04;
+    const seed       = strHash(vessel+program+anodeId);
+    const r1         = seededRand(seed);
+    const r2         = seededRand(seed+1);
+    if(r1 < failRate * secWeight)          return 'FAIL';
+    if(r2 < reviewRate * secWeight)        return 'REVIEW REQUIRED';
+    return 'PASS';
+  }
 
   // Section completion — some sections partially inspected for realism
   const SEC_COMPLETION = {1:60, 2:60, 3:60, 4:45, 5:30}; // anodes inspected per section
@@ -1889,15 +2244,7 @@ async function loadDemoData(){
 
         anodes.forEach((anode, i)=>{
           // Vary fail rate slightly by section (later sections slightly worse)
-          const failAdj   = Math.max(2, pattern.failEvery - Math.floor(sec/2));
-          const reviewAdj = Math.max(2, pattern.reviewEvery - Math.floor(sec/3));
-
-          const isPort = anode.id.includes('-P');
-          // Port and starboard can have different patterns
-          const offset = isPort ? 0 : 1;
-          const verdict = (i+offset)%failAdj===0 ? 'FAIL'
-                        : (i+offset)%reviewAdj===0 ? 'REVIEW REQUIRED'
-                        : 'PASS';
+          const verdict = randomVerdict(vessel, program, anode.id, sec);
 
           const f=verdict==='FAIL', rv=verdict==='REVIEW REQUIRED';
           const ans = {
