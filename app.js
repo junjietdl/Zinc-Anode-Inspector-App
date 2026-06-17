@@ -103,21 +103,7 @@ const dbDel=id=>new Promise((res,rej)=>{const r=db.transaction('inspections','re
 /* ══════════ STATE ══════════ */
 let page='session', activeSection=1, INS={}, step=1;
 
-/* ══════════ OLLAMA CONFIG ══════════ */
-const OLLAMA_URL = 'http://localhost:11434';
-let ollamaOK = false;
 
-async function pingOllama(){
-  try{
-    const r = await fetch(OLLAMA_URL+'/api/tags',{signal:AbortSignal.timeout(2000)});
-    if(!r.ok) throw new Error();
-    const data = await r.json();
-    const models = (data.models||[]).map(m=>m.name);
-    const vision = models.filter(m=>/llava|moondream|bakllava|minicpm|cogvlm/i.test(m));
-    ollamaOK = (vision.length > 0 || models.length > 0);
-    return vision.length ? vision : models;
-  } catch{ ollamaOK=false; return []; }
-}
 
 /* ══════════ PASSWORD ══════════
    To change the password:
@@ -140,6 +126,12 @@ function saveSession(data){
   catch {}
 }
 let SESSION = loadSession(); // {vessel, program, inspector, date}
+// Map display settings
+let mapFontSize = 8;     // anode ID font size (px)
+let mapBoxScale = 1.0;   // hotspot box size multiplier
+let mapLegendSize = 12;  // legend dot size (px)
+let mapLegendFont = 11;  // legend text size (px)
+
 let calibrateMode=false, calibrateSelected=null, calibrateOffsets={
   'S1-P01': {dx:200, dy:-58, dw:9, dh:20},
   'S1-P02': {dx:176, dy:-58, dw:9, dh:19},
@@ -464,6 +456,20 @@ function showPage(p){
 /* ══════════════════════════════════════
    KEEL MAP PAGE
    ══════════════════════════════════════ */
+function toggleMapSettings(){
+  const p=document.getElementById('map-settings-panel');
+  if(p) p.style.display=p.style.display==='none'?'block':'none';
+}
+
+function redrawHotspots(){
+  // Redraw only the SVG hotspots without full re-render (faster)
+  const filtered=inspections.filter(r=>r.vessel===SESSION.vessel&&r.program===SESSION.program);
+  const status={};
+  [...filtered].sort((a,b)=>a.id-b.id).forEach(r=>{status[r.anodeId]={verdict:r.verdict};});
+  const svg=document.getElementById('keel-hotspots');
+  if(svg) svg.innerHTML=buildHotspots(activeSection,status);
+}
+
 function renderMap(){
   document.getElementById('topbar-title').textContent='Keel Anode Map';
   document.getElementById('topbar-sub').textContent=
@@ -487,39 +493,93 @@ function renderMap(){
   const pending=anodes.length-anodes.filter(a=>status[a.id]).length;
 
   document.getElementById('content').innerHTML=`
-    <div class="sec-tabs" id="sec-tabs-bar">
-      ${SECTIONS.map(s=>`<button class="sec-tab ${s===activeSection?'active':''}" data-action="switch-sec" data-arg="${s}">Section ${s}</button>`).join('')}
+    <!-- Vessel + Program banner -->
+    <div style="background:var(--navy);color:#fff;border-radius:var(--rs);padding:8px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
+      <div>
+        <div style="font-size:13px;font-weight:800">${SESSION.vessel||'—'}</div>
+        <div style="font-size:11px;opacity:.75;margin-top:1px">${SESSION.program||'—'}</div>
+      </div>
+      <div style="font-size:11px;opacity:.7">Inspector: ${SESSION.inspector||'—'} · ${SESSION.date||'—'}</div>
     </div>
-    <div class="stats-bar">
-      <span class="spill">${anodes.length} anodes</span>
-      <span class="spill" style="color:var(--pass)">${pass} PASS</span>
-      <span class="spill" style="color:var(--fail)">${fail} FAIL</span>
-      <span class="spill" style="color:var(--text3)">${pending} pending</span>
+
+    <!-- Section selector (dropdown) + stats -->
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <select id="sec-select" onchange="switchSec(this.value)"
+        style="padding:6px 10px;border:1.5px solid var(--navy);border-radius:20px;background:var(--white);
+               font-size:12px;font-weight:700;color:var(--navy);cursor:pointer;appearance:none;
+               padding-right:24px;background-image:url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%226%22%3E%3Cpath d=%22M1 1l4 4 4-4%22 stroke=%22%230C447C%22 stroke-width=%221.5%22 fill=%22none%22/%3E%3C/svg%3E');
+               background-repeat:no-repeat;background-position:right 8px center">
+        ${SECTIONS.map(s=>`<option value="${s}" ${s===activeSection?'selected':''}>Section ${s}</option>`).join('')}
+      </select>
+      <div class="stats-bar" style="margin:0;flex:1">
+        <span class="spill">${anodes.length} anodes</span>
+        <span class="spill" style="color:var(--pass)">${pass} PASS</span>
+        <span class="spill" style="color:var(--fail)">${fail} FAIL</span>
+        <span class="spill" style="color:var(--text3)">${pending} pending</span>
+      </div>
     </div>
-    <div class="legend">
-      <span style="display:flex;align-items:center;gap:4px"><span class="ldot" style="background:var(--pass-bg);border-color:var(--pass-br)"></span>PASS</span>
-      <span style="display:flex;align-items:center;gap:4px"><span class="ldot" style="background:var(--fail-bg);border-color:var(--fail-br)"></span>FAIL</span>
-      <span style="display:flex;align-items:center;gap:4px"><span class="ldot" style="background:var(--warn-bg);border-color:var(--warn-br)"></span>REVIEW</span>
-      <span style="display:flex;align-items:center;gap:4px"><span class="ldot" style="background:#fff;border-color:var(--gray-br)"></span>Pending</span>
-      <button id="calib-toggle" class="btn btn-sm"
-        style="margin-left:auto;font-size:10px;padding:3px 9px;${calibrateMode?'background:var(--warn-bg);color:var(--warn);border-color:var(--warn-br)':''}"
-        data-action="toggle-calibrate">${calibrateMode?'✓ Calibrating — click Done':'Calibrate positions'}</button>
+
+    <!-- Legend + display controls -->
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      <div class="legend" style="margin:0;flex:1;flex-wrap:wrap">
+        <span style="display:flex;align-items:center;gap:3px">
+          <span style="width:${mapLegendSize}px;height:${mapLegendSize}px;border-radius:2px;display:inline-block;background:var(--pass-bg);border:1px solid var(--pass-br)"></span>
+          <span style="font-size:${mapLegendFont}px">PASS</span>
+        </span>
+        <span style="display:flex;align-items:center;gap:3px">
+          <span style="width:${mapLegendSize}px;height:${mapLegendSize}px;border-radius:2px;display:inline-block;background:var(--fail-bg);border:1px solid var(--fail-br)"></span>
+          <span style="font-size:${mapLegendFont}px">FAIL</span>
+        </span>
+        <span style="display:flex;align-items:center;gap:3px">
+          <span style="width:${mapLegendSize}px;height:${mapLegendSize}px;border-radius:2px;display:inline-block;background:var(--warn-bg);border:1px solid var(--warn-br)"></span>
+          <span style="font-size:${mapLegendFont}px">REVIEW</span>
+        </span>
+        <span style="display:flex;align-items:center;gap:3px">
+          <span style="width:${mapLegendSize}px;height:${mapLegendSize}px;border-radius:2px;display:inline-block;background:#fff;border:1px solid var(--gray-br)"></span>
+          <span style="font-size:${mapLegendFont}px">Pending</span>
+        </span>
+      </div>
+      <!-- Display settings button -->
+      <button class="btn btn-sm" style="font-size:10px;padding:3px 8px;flex-shrink:0"
+        onclick="toggleMapSettings()" id="map-settings-btn">⚙ Display</button>
     </div>
-    ${calibrateMode ? `<div style="background:var(--warn-bg);border:1px solid var(--warn-br);border-radius:var(--rs);padding:10px 12px;margin-bottom:8px;font-size:12px;color:var(--warn)">
-      <b>Calibration mode</b> — click an anode to select it (turns blue)<br>
-      <div style="margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
-        <div style="background:rgba(255,255,255,.5);border-radius:6px;padding:7px 10px">
-          <b>Move position</b><br>
-          Arrow keys = 1px &nbsp;|&nbsp; Shift+Arrow = 10px
+
+    <!-- Display settings panel (hidden by default) -->
+    <div id="map-settings-panel" style="display:none;background:var(--gray-lt);border-radius:var(--rs);padding:10px 12px;margin-bottom:8px;font-size:12px">
+      <div style="font-weight:700;color:var(--text2);margin-bottom:8px">Map display settings</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:3px">Anode ID font size: <b id="font-val">${mapFontSize}px</b></label>
+          <input type="range" min="5" max="16" value="${mapFontSize}" style="width:100%"
+            oninput="mapFontSize=parseInt(this.value);document.getElementById('font-val').textContent=this.value+'px';redrawHotspots()">
         </div>
-        <div style="background:rgba(255,255,255,.5);border-radius:6px;padding:7px 10px">
-          <b>Resize box</b><br>
-          W / S = height &plusmn;1px &nbsp;|&nbsp; A / D = width &plusmn;1px<br>
-          Shift+W/S/A/D = 10px steps
+        <div>
+          <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:3px">Box size: <b id="box-val">${Math.round(mapBoxScale*100)}%</b></label>
+          <input type="range" min="50" max="200" value="${Math.round(mapBoxScale*100)}" style="width:100%"
+            oninput="mapBoxScale=parseInt(this.value)/100;document.getElementById('box-val').textContent=this.value+'%';redrawHotspots()">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:3px">Legend dot size: <b id="ldot-val">${mapLegendSize}px</b></label>
+          <input type="range" min="8" max="24" value="${mapLegendSize}" style="width:100%"
+            oninput="mapLegendSize=parseInt(this.value);document.getElementById('ldot-val').textContent=this.value+'px';renderMap()">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:3px">Legend font: <b id="lfont-val">${mapLegendFont}px</b></label>
+          <input type="range" min="8" max="18" value="${mapLegendFont}" style="width:100%"
+            oninput="mapLegendFont=parseInt(this.value);document.getElementById('lfont-val').textContent=this.value+'px';renderMap()">
         </div>
       </div>
+      <div style="margin-top:8px">
+        <button class="btn btn-sm" data-action="toggle-calibrate"
+          style="font-size:10px;${calibrateMode?'background:var(--warn-bg);color:var(--warn);border-color:var(--warn-br)':''}">
+          ${calibrateMode?'✓ Exit calibration':'Calibrate anode positions'}
+        </button>
+      </div>
+    </div>
+${calibrateMode ? `<div style="background:var(--warn-bg);border:1px solid var(--warn-br);border-radius:var(--rs);padding:10px 12px;margin-bottom:8px;font-size:12px;color:var(--warn)">
+      <b>Calibration mode active</b> — click an anode (turns blue) then use arrow keys to move, W/A/S/D to resize
       <div style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        <button class="btn btn-sm" data-action="copy-offsets">Copy offsets to clipboard</button>
+        <button class="btn btn-sm" data-action="copy-offsets">Copy offsets</button>
         <button class="btn btn-sm" data-action="reset-offsets">Reset all</button>
         <button class="btn btn-sm" data-action="reset-selected">Reset selected</button>
         <span id="calib-status" style="font-size:11px;color:var(--text3);flex:1;text-align:right">No anode selected</span>
@@ -587,16 +647,19 @@ function buildHotspots(sec, status){
     const label = id.split('-')[1];
     const off = calibrateOffsets[id] || {dx:0, dy:0, dw:0, dh:0};
     const rx = cx + off.dx, ry = cy + off.dy;
-    const rw = w + (off.dw||0), rh = h + (off.dh||0);
+    // Apply box scale multiplier on top of calibration adjustments
+    const rw = (w + (off.dw||0)) * mapBoxScale;
+    const rh = (h + (off.dh||0)) * mapBoxScale;
     const isSelected = calibrateMode && calibrateSelected === id;
-    const fillCol  = isSelected ? 'rgba(24,95,165,0.5)' : f;
+    const fillCol   = isSelected ? 'rgba(24,95,165,0.5)' : f;
     const strokeCol = isSelected ? '#0C447C' : st;
     const sw = isSelected ? 3 : 2;
     return `<g style="cursor:${calibrateMode?'move':'pointer'}" data-id="${id}" data-base-cx="${cx}" data-base-cy="${cy}" data-base-w="${w}" data-base-h="${h}">
       <rect x="${rx-rw/2}" y="${ry-rh/2}" width="${rw}" height="${rh}" rx="3"
             fill="${fillCol}" stroke="${strokeCol}" stroke-width="${sw}"/>
       <text x="${rx}" y="${ry+1}" text-anchor="middle" dominant-baseline="central"
-            font-size="8" font-weight="700" fill="${isSelected ? '#0C447C' : (st === 'rgba(150,150,150,0.5)' ? '#999' : st)}"
+            font-size="${mapFontSize}" font-weight="700"
+            fill="${isSelected ? '#0C447C' : (st === 'rgba(150,150,150,0.5)' ? '#999' : st)}"
             font-family="sans-serif">${label}</text>
     </g>`;
   }
@@ -814,19 +877,18 @@ function sessionGo(){
    ══════════════════════════════════════ */
 function dots(a){
   return`<div style="display:flex;gap:5px;align-items:center;margin-bottom:12px">
-    ${[1,2,3].map(i=>`<div style="height:7px;border-radius:4px;transition:.2s;
+    ${[1,2].map(i=>`<div style="height:7px;border-radius:4px;transition:.2s;
       background:${i<a?'#639922':i===a?'#0C447C':'#D3D1C7'};
       width:${i===a?'20px':'7px'}"></div>`).join('')}
-    <span style="font-size:11px;color:var(--text3);margin-left:5px">Step ${a} of 3</span>
+    <span style="font-size:11px;color:var(--text3);margin-left:5px">Step ${a} of 2</span>
   </div>`;
 }
 
 function renderInspect(){
   document.getElementById('topbar-title').textContent = 'Inspect Anode';
   document.getElementById('topbar-sub').textContent   = INS.anodeId || 'No anode selected';
-  if(step===1)      rPhoto();
-  else if(step===2) rChecklist();
-  else              rVerdict();
+  if(step===1) rChecklist();
+  else         rVerdict();
 }
 
 /* Step 1 — Checklist */
@@ -854,7 +916,7 @@ function rChecklist(){
       </div>
     </div>
     <div class="btn-row">
-      <button class="btn" onclick="step=1;renderInspect()">← Photo</button>
+      <button class="btn" data-action="show-page" data-arg="map">← Map</button>
       <button class="btn btn-primary" id="chk-next" ${done?'':'disabled'} data-action="checklist-go">
         Review →
       </button>
@@ -906,309 +968,10 @@ function chkAnswer(id, val){
 function checklistGo(){
   INS.remarks = document.getElementById('f-rem')?.value || '';
   calcVerdict();
-  step=3; renderInspect();
-}
-
-
-/* Step 2 — Photo analysis (optional) */
-function rPhoto(){
-  const hasPhoto = !!INS.photoB64;
-  const aiDone   = !!INS.aiResult;
-
-  document.getElementById('content').innerHTML=`
-    ${dots(1)}
-    <div class="card" style="padding:9px 14px;margin-bottom:8px">
-      <div style="font-size:13px;font-weight:700;color:var(--navy)">${INS.anodeId}</div>
-      <div style="font-size:11px;color:var(--text2);margin-top:2px">
-        Section ${INS.section} · ${INS.side} · ${SESSION.vessel}
-      </div>
-    </div>
-
-    <!-- Ollama status -->
-    <div class="card" style="padding:9px 14px;margin-bottom:8px">
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="font-size:12px;color:var(--text2)">
-          <span id="ai-dot" style="width:8px;height:8px;border-radius:50%;background:#ccc;display:inline-block;margin-right:5px;vertical-align:middle"></span>
-          <span id="ai-status">Checking Ollama…</span>
-        </div>
-        <span style="font-size:10px;color:var(--text3)">Optional — skip if not available</span>
-      </div>
-      <div id="ai-model-row" style="display:none;margin-top:8px">
-        <select id="ai-model" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px;background:var(--white)"></select>
-      </div>
-    </div>
-
-    <!-- Photo upload -->
-    <div class="card">
-      <div class="card-title">Anode photo</div>
-      <div id="upload-zone" style="border:2px dashed var(--gray-br);border-radius:var(--rs);padding:20px;text-align:center;cursor:pointer;background:var(--gray-lt)"
-           onclick="document.getElementById('photo-file').click()">
-        <div style="font-size:24px;margin-bottom:5px">📷</div>
-        <div style="font-size:13px;color:var(--text2);font-weight:600">Tap to capture or upload photo</div>
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">Include a ruler if possible</div>
-      </div>
-      <input type="file" id="photo-file" accept="image/*" capture="environment"
-             style="display:none" onchange="onInspPhoto(this)">
-      ${hasPhoto?`<img id="photo-preview" src="${INS.photoPreview}"
-        style="width:100%;max-height:220px;object-fit:contain;border-radius:var(--rs);margin-top:10px;border:1px solid var(--border)">`
-        :'<img id="photo-preview" style="display:none;width:100%;max-height:220px;object-fit:contain;border-radius:var(--rs);margin-top:10px">'}
-    </div>
-
-    <!-- AI analyse button -->
-    <button class="btn btn-primary" id="ai-analyse-btn"
-            onclick="runAIAnalysis()" ${hasPhoto&&ollamaOK?'':'disabled'}
-            style="margin-bottom:8px">
-      Analyse with AI
-    </button>
-
-    <!-- Progress -->
-    <div id="ai-progress" style="display:none" class="card">
-      <div style="font-size:13px;font-weight:600;color:var(--navy)" id="ai-prog-label">Analysing…</div>
-      <div style="height:6px;background:var(--gray-lt);border-radius:3px;overflow:hidden;margin-top:8px">
-        <div id="ai-prog-fill" style="height:100%;background:var(--navy);border-radius:3px;width:0%;transition:width .4s"></div>
-      </div>
-      <div style="font-size:11px;color:var(--text3);margin-top:5px">May take 30–90 seconds</div>
-    </div>
-
-    <!-- AI result (shown after analysis) -->
-    ${aiDone ? renderAIResult(INS.aiResult) : '<div id="ai-result-slot"></div>'}
-
-    <div class="btn-row">
-      <button class="btn" data-action="show-page" data-arg="map">← Map</button>
-      <button class="btn btn-primary" data-action="photo-go">
-        ${aiDone ? 'Next: Checklist →' : 'Skip → Checklist'}
-      </button>
-    </div>`;
-
-  // Check Ollama
-  pingOllama().then(models=>{
-    const dot = document.getElementById('ai-dot');
-    const st  = document.getElementById('ai-status');
-    const mr  = document.getElementById('ai-model-row');
-    const btn = document.getElementById('ai-analyse-btn');
-    if(!dot) return;
-    if(ollamaOK && models.length){
-      dot.style.background='#97C459';
-      st.textContent='Ollama ready — AI analysis available';
-      mr.style.display='block';
-      const sel = document.getElementById('ai-model');
-      if(sel) sel.innerHTML = models.map(m=>`<option value="${m}" ${/llava/i.test(m)?'selected':''}>${m}</option>`).join('');
-      if(btn && INS.photoB64) btn.disabled=false;
-    } else {
-      dot.style.background='#F09595';
-      st.textContent='Ollama not running — skip or run: ollama serve';
-      if(btn) btn.disabled=true;
-    }
-  });
-}
-
-function renderAIResult(r){
-  if(!r) return '<div id="ai-result-slot"></div>';
-  const v=r.verdict||'?';
-  const vc=v==='PASS'?'var(--pass)':v==='FAIL'?'var(--fail)':'var(--warn)';
-  const vbg=v==='PASS'?'var(--pass-bg)':v==='FAIL'?'var(--fail-bg)':'var(--warn-bg)';
-  const checks=[
-    {k:'c1_remaining_50pct',l:'≥50% remaining',   crit:true},
-    {k:'c2_no_core_exposed',l:'No core exposed',   crit:true},
-    {k:'c3_no_knife_edge',  l:'No knife-edge',      crit:true},
-    {k:'c4_surface_acceptable',l:'Surface OK',      crit:false},
-    {k:'c5_mounting_secure',   l:'Mounting secure', crit:false},
-  ];
-  const chips = checks.map(c=>{
-    const val=r[c.k];
-    const bg=val===true?'var(--pass-bg)':val===false?'var(--fail-bg)':'var(--gray-lt)';
-    const col=val===true?'var(--pass)':val===false?'var(--fail)':'var(--text3)';
-    return`<span style="background:${bg};color:${col};font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;display:inline-block;margin:2px">${c.l}: ${val===true?'✓':val===false?'✗':'?'}</span>`;
-  }).join('');
-  return`<div id="ai-result-slot">
-    <div class="card" style="background:${vbg};border-color:${vc}">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-        <div style="width:36px;height:36px;border-radius:50%;background:${vc};color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0">${v==='PASS'?'✓':v==='FAIL'?'✗':'!'}</div>
-        <div>
-          <div style="font-size:16px;font-weight:800;color:${vc}">${v}</div>
-          <div style="font-size:11px;color:${vc};margin-top:1px">${r.summary||''}</div>
-        </div>
-      </div>
-      <div style="margin-bottom:6px">${chips}</div>
-      ${r.observations?`<div style="font-size:11px;color:var(--text2);margin-top:6px;line-height:1.5">${r.observations.split('\n')[0]||''}</div>`:''}
-    </div>
-    <div style="font-size:11px;color:var(--text3);margin-bottom:8px;text-align:center">
-      AI suggestion — review checklist on previous step if needed
-    </div>
-  </div>`;
-}
-
-function onInspPhoto(input){
-  const file=input.files[0]; if(!file) return;
-  const img=new Image(), url=URL.createObjectURL(file);
-  img.onload=()=>{
-    const MAX=1200; let w=img.width,h=img.height;
-    if(w>MAX){h=Math.round(h*MAX/w);w=MAX;}
-    const c=document.createElement('canvas');
-    c.width=w;c.height=h;
-    c.getContext('2d').drawImage(img,0,0,w,h);
-    INS.photoB64=c.toDataURL('image/jpeg',.88).split(',')[1];
-    INS.photoPreview=c.toDataURL('image/jpeg',.88);
-    URL.revokeObjectURL(url);
-    const pv=document.getElementById('photo-preview');
-    if(pv){pv.src=INS.photoPreview;pv.style.display='block';}
-    const uz=document.getElementById('upload-zone');
-    if(uz) uz.style.borderStyle='solid';
-    const btn=document.getElementById('ai-analyse-btn');
-    if(btn&&ollamaOK) btn.disabled=false;
-  };
-  img.src=url;
-}
-
-async function runAIAnalysis(){
-  const model = document.getElementById('ai-model')?.value;
-  if(!model||!INS.photoB64) return;
-
-  const btn  = document.getElementById('ai-analyse-btn');
-  const prog = document.getElementById('ai-progress');
-  const fill = document.getElementById('ai-prog-fill');
-  if(btn)  btn.disabled=true;
-  if(prog) prog.style.display='block';
-
-  const questions=[
-    {key:'c1_remaining_50pct',inverted:false,prompt:`You are inspecting a sacrificial zinc anode on a ship's hull.
-
-CRITICAL QUESTION: Is at least 50% of the zinc anode material STILL REMAINING?
-
-A BRAND NEW anode is a THICK, SOLID, OVAL/ELLIPTICAL zinc block — like a large solid egg shape. Approximately 13cm wide x 10cm tall x 5cm thick when new.
-
-Signs that LESS THAN 50% remains (answer NO):
-- The anode looks thin, flat, skeletal or like a thin shell
-- You can clearly see the steel mounting rod/bracket running through the middle because the zinc has worn away around it
-- The overall shape looks like a thin plate or blade rather than a solid oval block
-- Orange rust or bare metal is visible on the main body
-- The zinc body is dramatically smaller than a solid egg shape
-- Most of the original zinc volume is clearly gone
-
-Signs that MORE THAN 50% remains (answer YES):
-- The anode is still a recognisably thick, solid, chunky oval shape
-- Still looks like more than half of the original solid block is present
-- Zinc body still dominates over the steel hardware
-
-Be STRICT and CONSERVATIVE — if you are unsure, answer NO.
-Answer with ONLY one word: YES or NO`},
-    {key:'c2_no_core_exposed',inverted:true,prompt:`You are inspecting a sacrificial zinc anode on a ship's hull.
-
-QUESTION: Is the steel core or metal insert EXPOSED or visible through the zinc body?
-
-The mounting brackets at the very top and bottom ends are NORMAL.
-What is NOT normal: orange/rust-coloured or bare steel areas showing THROUGH the zinc body itself — meaning zinc has worn away to expose underlying metal.
-
-Answer with ONLY one word:
-YES — if steel/rust/core IS exposed through the zinc body
-NO — if zinc body is intact with no core exposure`},
-    {key:'c3_no_knife_edge',inverted:true,prompt:`You are inspecting a sacrificial zinc anode on a ship's hull.
-
-QUESTION: Has the anode worn into a knife-edge, spike, or dangerously thin sharp shape?
-
-A GOOD anode is a solid rounded oval shape.
-A DANGEROUS anode: thin blade, pointed spike, extremely thin jagged shapes that could break off.
-
-Answer with ONLY one word:
-YES — knife-edge or spike IS present
-NO — shape is acceptable`},
-    {key:'c4_surface_acceptable',inverted:false,prompt:`You are inspecting a sacrificial zinc anode.
-Is the surface condition acceptable? Normal pitting and rough grey/silver texture is fine.
-Unacceptable: extreme deep pitting, large chunks missing, severe cracking across most of the surface.
-Answer: YES (acceptable) or NO (unacceptable)`},
-    {key:'c5_mounting_secure',inverted:false,prompt:`You are inspecting a sacrificial zinc anode.
-Do the mounting brackets appear secure and intact? If unclear, answer YES.
-Answer: YES (secure) or NO (damaged/missing)`},
-  ];
-
-  const answers={};
-  let pct=5;
-  const ticker=setInterval(()=>{
-    pct=Math.min(pct+(pct<80?3:0.5),92);
-    if(fill) fill.style.width=pct+'%';
-  },600);
-
-  try{
-    for(const q of questions){
-      document.getElementById('ai-prog-label').textContent='Checking: '+q.key.replace(/_/g,' ')+'…';
-      const r=await fetch(OLLAMA_URL+'/api/generate',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({model,prompt:q.prompt,images:[INS.photoB64],stream:false,options:{temperature:0.01,num_predict:10}}),
-        signal:AbortSignal.timeout(60000)
-      });
-      const data=await r.json();
-      const resp=(data.response||'').trim().toLowerCase();
-      const positive=/yes|good|ok|acceptable|intact|secure|remaining|sufficient/i.test(resp);
-      answers[q.key] = q.inverted ? !positive : positive;
-    }
-
-    // Consistency check
-    if(!answers.c2_no_core_exposed||!answers.c3_no_knife_edge){
-      answers.c1_remaining_50pct=false;
-    }
-
-    // Percentage from checklist logic
-    let estPct;
-    if(!answers.c1_remaining_50pct&&!answers.c2_no_core_exposed&&!answers.c3_no_knife_edge) estPct=10;
-    else if(!answers.c1_remaining_50pct&&!answers.c2_no_core_exposed) estPct=20;
-    else if(!answers.c1_remaining_50pct&&!answers.c3_no_knife_edge)   estPct=15;
-    else if(!answers.c2_no_core_exposed) estPct=30;
-    else if(!answers.c1_remaining_50pct) estPct=35;
-    else if(!answers.c3_no_knife_edge)   estPct=20;
-    else estPct=70;
-
-    // Verdict
-    const f1=!answers.c1_remaining_50pct,f2=!answers.c2_no_core_exposed,f3=!answers.c3_no_knife_edge;
-    const soft=!answers.c4_surface_acceptable||!answers.c5_mounting_secure;
-    let verdict,summary;
-    if(f1||f2||f3){
-      verdict='FAIL';
-      const reasons=[];
-      if(f1)reasons.push('remaining<50%');
-      if(f2)reasons.push('core exposed');
-      if(f3)reasons.push('knife-edge');
-      summary='Critical failure: '+reasons.join(', ')+' (~'+estPct+'% remaining)';
-    } else if(soft){
-      verdict='REVIEW REQUIRED';
-      summary='Advisory items need attention (~'+estPct+'% remaining)';
-    } else {
-      verdict='PASS';
-      summary='All criteria satisfied — approximately '+estPct+'% remaining';
-    }
-
-    INS.aiResult={...answers,estimated_remaining_pct:estPct,verdict,summary,
-      observations:Object.entries(answers).map(([k,v])=>k.replace(/_/g,' ')+': '+(v?'PASS':'FAIL')).join('\n')};
-
-    // Apply AI answers to checklist (inspector can still override)
-    INS.checklistAnswers.c1=answers.c1_remaining_50pct;
-    INS.checklistAnswers.c2=answers.c2_no_core_exposed;
-    INS.checklistAnswers.c3=answers.c3_no_knife_edge;
-    INS.checklistAnswers.c4=answers.c4_surface_acceptable;
-    INS.checklistAnswers.c5=answers.c5_mounting_secure;
-
-    clearInterval(ticker);
-    if(fill) fill.style.width='100%';
-    setTimeout(()=>{
-      if(prog) prog.style.display='none';
-      const slot=document.getElementById('ai-result-slot');
-      if(slot) slot.outerHTML=renderAIResult(INS.aiResult);
-      const goBtn=document.querySelector('[data-action="photo-go"]');
-      if(goBtn) goBtn.textContent='Continue →';
-    },300);
-
-  }catch(err){
-    clearInterval(ticker);
-    if(prog) prog.style.display='none';
-    if(btn) btn.disabled=false;
-    showToast('AI analysis failed: '+err.message,'error');
-  }
-}
-
-function photoGo(){
-  // AI results already applied to checklistAnswers in runAIAnalysis
   step=2; renderInspect();
 }
+
+
 
 /* Step 3 — Verdict */
 function rVerdict(){
@@ -1216,7 +979,7 @@ function rVerdict(){
   const vc=v==='PASS'?'var(--pass)':v==='FAIL'?'var(--fail)':'var(--warn)';
   const vbg=v==='PASS'?'var(--pass-bg)':v==='FAIL'?'var(--fail-bg)':'var(--warn-bg)';
   document.getElementById('content').innerHTML=`
-    ${dots(3)}
+    ${dots(2)}
     <div class="vbanner" style="background:${vbg}">
       <div class="vicon" style="background:${vc}">${v==='PASS'?'✓':v==='FAIL'?'✗':'!'}</div>
       <div>
@@ -1251,7 +1014,7 @@ function rVerdict(){
       </div>
     </div>
     <div class="btn-row">
-      <button class="btn" onclick="step=2;renderInspect()">← Checklist</button>
+      <button class="btn" data-action="go-back-checklist">← Checklist</button>
       <button class="btn btn-primary" data-action="save-inspection">Save</button>
       <button class="btn" data-action="print-report">Print / PDF</button>
     </div>`;
@@ -1302,25 +1065,42 @@ function showToast(msg, type='success'){
 /* ══════════════════════════════════════
    RECORDS PAGE
    ══════════════════════════════════════ */
+// Records filter state — persisted across re-renders
+let recFilterVessel='', recFilterVerdict='';
+
 function renderRecords(){
   document.getElementById('topbar-title').textContent='Records';
-  document.getElementById('topbar-sub').textContent=`${inspections.length} inspections on this device`;
+  document.getElementById('topbar-sub').textContent=`${inspections.length} inspections`;
   if(!inspections.length){document.getElementById('content').innerHTML=`<div style="text-align:center;padding:44px 20px;color:var(--text3)"><div style="font-size:40px;margin-bottom:12px">📋</div><div style="font-size:16px;font-weight:700;margin-bottom:6px">No records yet</div><div class="muted">Tap an anode on the keel map to start</div></div>`;return;}
   const sorted=[...inspections].sort((a,b)=>b.id-a.id);
   const uvs=[...new Set(sorted.map(r=>r.vessel))];
   document.getElementById('content').innerHTML=`
     <div class="card" style="padding:9px 12px;margin-bottom:8px"><div class="grid2" style="gap:7px">
-      <select id="rfv" onchange="renderRecords()"><option value="">All vessels</option>${uvs.map(v=>`<option>${v}</option>`).join('')}</select>
-      <select id="rfvrd" onchange="renderRecords()"><option value="">All verdicts</option><option>PASS</option><option>FAIL</option><option>REVIEW REQUIRED</option></select>
+      <select id="rfv" onchange="recFilterVessel=this.value;filterRecords()">
+        <option value="">All vessels</option>
+        ${uvs.map(v=>`<option ${recFilterVessel===v?'selected':''}>${v}</option>`).join('')}
+      </select>
+      <select id="rfvrd" onchange="recFilterVerdict=this.value;filterRecords()">
+        <option value="">All verdicts</option>
+        <option ${recFilterVerdict==='PASS'?'selected':''}>PASS</option>
+        <option ${recFilterVerdict==='FAIL'?'selected':''}>FAIL</option>
+        <option ${recFilterVerdict==='REVIEW REQUIRED'?'selected':''}>REVIEW REQUIRED</option>
+      </select>
     </div></div>
     <div class="card" id="rlist"></div>
     <div class="btn-row">
       <button class="btn btn-sm" data-action="exp-json">Export JSON</button>
       <button class="btn btn-sm" onclick="document.getElementById('impf').click()">Import JSON</button>
       <input type="file" id="impf" accept=".json" style="display:none" onchange="impJSON(this)">
+      <button class="btn btn-sm" style="color:var(--navy);border-color:var(--navy)" data-action="demo-data">Load demo data</button>
       <button class="btn btn-sm" style="color:var(--fail);border-color:var(--fail-br);margin-left:auto" data-action="reset-all-data">Reset all data</button>
     </div>`;
-  const fv=document.getElementById('rfv').value,fvrd=document.getElementById('rfvrd').value;
+  filterRecords();
+}
+
+function filterRecords(){
+  const sorted=[...inspections].sort((a,b)=>b.id-a.id);
+  const fv=recFilterVessel, fvrd=recFilterVerdict;
   const f=sorted.filter(r=>(fv?r.vessel===fv:true)&&(fvrd?r.verdict===fvrd:true));
   document.getElementById('rlist').innerHTML=f.length
     ?f.map(r=>`<div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:0.5px solid var(--border);cursor:pointer" onclick="openRec('${r.id}')">
@@ -1816,6 +1596,125 @@ async function resetAllData(){
   }
 }
 
+
+/* ══════════ DEMO DATA ══════════ */
+async function loadDemoData(){
+  if(!confirm('Load demo inspection data?\nThis adds sample records for Vessel A, Programs 1 & 2.\nExisting data is kept.')) return;
+
+  const vessel1='Vessel A', vessel2='Vessel B';
+  const prog1='Maintenance Program 1', prog2='Maintenance Program 2';
+  const inspectors=['Ahmad','Siti','Rajan','Wei Ling'];
+  const dates=['01 Jan 2026','15 Jan 2026','01 Feb 2026','15 Feb 2026','01 Mar 2026'];
+
+  // Generate realistic demo records
+  const demoRecs=[];
+  let id=Date.now();
+
+  // Section 1 — Vessel A Program 1 — mostly PASS with some FAILs
+  const sec1Results=[
+    // Port side
+    'PASS','PASS','PASS','FAIL','PASS','PASS','PASS','REVIEW REQUIRED',
+    'PASS','PASS','FAIL','PASS','PASS','PASS','PASS','PASS',
+    'PASS','PASS','PASS','PASS','PASS','FAIL','PASS','PASS',
+    'PASS','PASS','PASS','PASS','REVIEW REQUIRED','PASS',
+    // Starboard side
+    'PASS','PASS','FAIL','PASS','PASS','PASS','PASS','PASS',
+    'REVIEW REQUIRED','PASS','PASS','PASS','FAIL','PASS','PASS','PASS',
+    'PASS','PASS','PASS','PASS','PASS','PASS','FAIL','PASS',
+    'PASS','REVIEW REQUIRED','PASS','PASS','PASS','PASS'
+  ];
+
+  ALL[1].forEach((anode,i)=>{
+    const verdict=sec1Results[i]||'PASS';
+    const f1=verdict==='FAIL',fr=verdict==='REVIEW REQUIRED';
+    const ans={
+      c1:!f1, c2:!f1, c3:!(f1&&i%3===0),
+      c4:!(fr||f1), c5:true, c6:!(fr), c7:!f1
+    };
+    demoRecs.push({
+      id:(id++).toString(), anodeId:anode.id,
+      section:1, side:anode.side,
+      vessel:vessel1, program:prog1,
+      inspector:inspectors[i%inspectors.length],
+      date:dates[i%dates.length],
+      verdict, verdictReasons:verdict==='PASS'?['All criteria satisfied']:
+        verdict==='FAIL'?['Remaining<50%']:['Surface condition advisory'],
+      checklistAnswers:ans, remarks:'', notes:'',
+      savedAt:new Date(2026,0,15+i).toISOString()
+    });
+  });
+
+  // Section 2 — Vessel A Program 1
+  ALL[2].forEach((anode,i)=>{
+    const verdict=i%7===0?'FAIL':i%5===0?'REVIEW REQUIRED':'PASS';
+    demoRecs.push({
+      id:(id++).toString(), anodeId:anode.id,
+      section:2, side:anode.side,
+      vessel:vessel1, program:prog1,
+      inspector:inspectors[i%inspectors.length],
+      date:dates[Math.floor(i/12)%dates.length],
+      verdict, verdictReasons:verdict==='PASS'?['All criteria satisfied']:['Advisory check needed'],
+      checklistAnswers:{c1:verdict!=='FAIL',c2:true,c3:true,c4:verdict==='PASS',c5:true,c6:true,c7:true},
+      remarks:'', notes:'', savedAt:new Date(2026,1,i+1).toISOString()
+    });
+  });
+
+  // Section 3 — Vessel A Program 1 — partial (only 30 anodes)
+  ALL[3].slice(0,30).forEach((anode,i)=>{
+    const verdict=i%9===0?'FAIL':'PASS';
+    demoRecs.push({
+      id:(id++).toString(), anodeId:anode.id,
+      section:3, side:anode.side,
+      vessel:vessel1, program:prog1,
+      inspector:inspectors[i%2],
+      date:'01 Mar 2026',
+      verdict, verdictReasons:['All criteria satisfied'],
+      checklistAnswers:{c1:true,c2:true,c3:true,c4:true,c5:true,c6:true,c7:true},
+      remarks:'', notes:'', savedAt:new Date(2026,2,i+1).toISOString()
+    });
+  });
+
+  // Vessel A Program 2 — Section 1 — compare against Program 1
+  ALL[1].forEach((anode,i)=>{
+    const verdict=i%4===0?'FAIL':i%6===0?'REVIEW REQUIRED':'PASS';
+    demoRecs.push({
+      id:(id++).toString(), anodeId:anode.id,
+      section:1, side:anode.side,
+      vessel:vessel1, program:prog2,
+      inspector:inspectors[(i+1)%inspectors.length],
+      date:'15 Apr 2026',
+      verdict, verdictReasons:verdict==='PASS'?['All criteria satisfied']:['Remaining<50%'],
+      checklistAnswers:{c1:verdict!=='FAIL',c2:verdict!=='FAIL',c3:true,c4:true,c5:true,c6:true,c7:true},
+      remarks:'', notes:'', savedAt:new Date(2026,3,15+i).toISOString()
+    });
+  });
+
+  // Vessel B Program 1 — Section 1
+  ALL[1].forEach((anode,i)=>{
+    const verdict=i%5===0?'FAIL':'PASS';
+    demoRecs.push({
+      id:(id++).toString(), anodeId:anode.id,
+      section:1, side:anode.side,
+      vessel:vessel2, program:prog1,
+      inspector:'Omar',
+      date:'01 May 2026',
+      verdict, verdictReasons:['All criteria satisfied'],
+      checklistAnswers:{c1:true,c2:true,c3:true,c4:true,c5:true,c6:true,c7:true},
+      remarks:'', notes:'', savedAt:new Date(2026,4,i+1).toISOString()
+    });
+  });
+
+  // Save all demo records
+  let added=0;
+  for(const r of demoRecs){
+    if(!inspections.find(x=>x.id===r.id)){
+      await dbPut(r); inspections.push(r); added++;
+    }
+  }
+  showToast(`Demo data loaded — ${added} records added`);
+  renderRecords();
+}
+
 /* ══════════ EXPORT / IMPORT ══════════ */
 async function expJSON(){
   const json = JSON.stringify(inspections, null, 2);
@@ -1895,13 +1794,13 @@ document.addEventListener('click', e => {
   if (action === 'print-single')      printSingle(arg);
   if (action === 'session-go')        sessionGo();
   if (action === 'checklist-go')      checklistGo();
-  if (action === 'photo-go')          photoGo();
   if (action === 'chk-answer')        { const[cid,val]=arg.split(','); chkAnswer(cid,val); }
   if (action === 'override-verdict')  { INS.verdict=arg; INS.verdictReasons=['Manually overridden']; rVerdict(); }
   if (action === 'go-back-checklist') { step=1; renderInspect(); }
   if (action === 'save-inspection')   saveInsp();
   if (action === 'print-report')      printRep();
   if (action === 'exp-json')          { expJSON(); }
+  if (action === 'demo-data')         { loadDemoData(); }
   if (action === 'reset-all-data')    { resetAllData(); }
   if (action === 'pdf-section')       pdfSection();
   if (action === 'pdf-overall')       pdfOverall();
