@@ -2230,8 +2230,6 @@ async function loadDemoData(){
   let id=Date.now();
 
   VESSELS_DEMO.forEach((vessel, vi)=>{
-    const pattern = VESSEL_PATTERNS[vessel];
-
     PROGRAMS_DEMO.forEach((program, pi)=>{
       const dates = PROG_DATES[program];
       const inspector = INSPECTORS[(vi*4+pi)%INSPECTORS.length];
