@@ -1423,11 +1423,11 @@ function renderRecords(){
     </div></div>
     <div class="card" id="rlist"></div>
     <div class="btn-row">
-      <button class="btn btn-sm" data-action="exp-json">Export JSON</button>
+      <button class="btn btn-sm" onclick="expJSON()">Export JSON</button>
       <button class="btn btn-sm" onclick="document.getElementById('impf').click()">Import JSON</button>
       <input type="file" id="impf" accept=".json" style="display:none" onchange="impJSON(this)">
-      <button class="btn btn-sm" style="color:var(--navy);border-color:var(--navy)" data-action="demo-data">Load demo data</button>
-      <button class="btn btn-sm" style="color:var(--fail);border-color:var(--fail-br);margin-left:auto" data-action="reset-all-data">Reset all data</button>
+      <button class="btn btn-sm" style="color:var(--navy);border-color:var(--navy)" onclick="loadDemoData()">Load demo data</button>
+      <button class="btn btn-sm" style="color:var(--fail);border-color:var(--fail-br);margin-left:auto" onclick="resetAllData()">Reset all data</button>
     </div>`;
   filterRecords();
 }
