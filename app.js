@@ -1599,112 +1599,90 @@ async function resetAllData(){
 
 /* ══════════ DEMO DATA ══════════ */
 async function loadDemoData(){
-  if(!confirm('Load demo inspection data?\nThis adds sample records for Vessel A, Programs 1 & 2.\nExisting data is kept.')) return;
+  if(!confirm('Load demo data for ALL vessels (A B C D) and ALL programs (1 2 3 4)?\nAll 5 sections will be fully populated.\nExisting data is kept.')) return;
 
-  const vessel1='Vessel A', vessel2='Vessel B';
-  const prog1='Maintenance Program 1', prog2='Maintenance Program 2';
-  const inspectors=['Ahmad','Siti','Rajan','Wei Ling'];
-  const dates=['01 Jan 2026','15 Jan 2026','01 Feb 2026','15 Feb 2026','01 Mar 2026'];
+  const VESSELS_DEMO  = ['Vessel A','Vessel B','Vessel C','Vessel D'];
+  const PROGRAMS_DEMO = ['Maintenance Program 1','Maintenance Program 2','Maintenance Program 3','Maintenance Program 4'];
+  const INSPECTORS    = ['Ahmad','Siti','Rajan','Wei Ling','Omar','Priya','Jason','Sarah'];
 
-  // Generate realistic demo records
+  // Date spread per program (quarterly)
+  const PROG_DATES = {
+    'Maintenance Program 1': ['15 Jan 2026','16 Jan 2026','17 Jan 2026','18 Jan 2026','19 Jan 2026'],
+    'Maintenance Program 2': ['15 Apr 2026','16 Apr 2026','17 Apr 2026','18 Apr 2026','19 Apr 2026'],
+    'Maintenance Program 3': ['15 Jul 2026','16 Jul 2026','17 Jul 2026','18 Jul 2026','19 Jul 2026'],
+    'Maintenance Program 4': ['15 Oct 2026','16 Oct 2026','17 Oct 2026','18 Oct 2026','19 Oct 2026'],
+  };
+
+  // Verdict pattern per vessel — gives each vessel a distinct inspection story
+  // [failEvery, reviewEvery] — e.g. [7,4] means fail every 7th, review every 4th
+  const VESSEL_PATTERNS = {
+    'Vessel A': {failEvery:8, reviewEvery:5},   // best condition
+    'Vessel B': {failEvery:6, reviewEvery:4},   // moderate
+    'Vessel C': {failEvery:5, reviewEvery:3},   // more issues
+    'Vessel D': {failEvery:4, reviewEvery:3},   // most issues
+  };
+
+  // Section completion — some sections partially inspected for realism
+  const SEC_COMPLETION = {1:60, 2:60, 3:60, 4:45, 5:30}; // anodes inspected per section
+
   const demoRecs=[];
   let id=Date.now();
 
-  // Section 1 — Vessel A Program 1 — mostly PASS with some FAILs
-  const sec1Results=[
-    // Port side
-    'PASS','PASS','PASS','FAIL','PASS','PASS','PASS','REVIEW REQUIRED',
-    'PASS','PASS','FAIL','PASS','PASS','PASS','PASS','PASS',
-    'PASS','PASS','PASS','PASS','PASS','FAIL','PASS','PASS',
-    'PASS','PASS','PASS','PASS','REVIEW REQUIRED','PASS',
-    // Starboard side
-    'PASS','PASS','FAIL','PASS','PASS','PASS','PASS','PASS',
-    'REVIEW REQUIRED','PASS','PASS','PASS','FAIL','PASS','PASS','PASS',
-    'PASS','PASS','PASS','PASS','PASS','PASS','FAIL','PASS',
-    'PASS','REVIEW REQUIRED','PASS','PASS','PASS','PASS'
-  ];
+  VESSELS_DEMO.forEach((vessel, vi)=>{
+    const pattern = VESSEL_PATTERNS[vessel];
 
-  ALL[1].forEach((anode,i)=>{
-    const verdict=sec1Results[i]||'PASS';
-    const f1=verdict==='FAIL',fr=verdict==='REVIEW REQUIRED';
-    const ans={
-      c1:!f1, c2:!f1, c3:!(f1&&i%3===0),
-      c4:!(fr||f1), c5:true, c6:!(fr), c7:!f1
-    };
-    demoRecs.push({
-      id:(id++).toString(), anodeId:anode.id,
-      section:1, side:anode.side,
-      vessel:vessel1, program:prog1,
-      inspector:inspectors[i%inspectors.length],
-      date:dates[i%dates.length],
-      verdict, verdictReasons:verdict==='PASS'?['All criteria satisfied']:
-        verdict==='FAIL'?['Remaining<50%']:['Surface condition advisory'],
-      checklistAnswers:ans, remarks:'', notes:'',
-      savedAt:new Date(2026,0,15+i).toISOString()
+    PROGRAMS_DEMO.forEach((program, pi)=>{
+      const dates = PROG_DATES[program];
+      const inspector = INSPECTORS[(vi*4+pi)%INSPECTORS.length];
+      const inspector2 = INSPECTORS[(vi*4+pi+1)%INSPECTORS.length];
+
+      // Each vessel×program gets all 5 sections
+      [1,2,3,4,5].forEach(sec=>{
+        const count = SEC_COMPLETION[sec];
+        const anodes = ALL[sec].slice(0, count);
+
+        anodes.forEach((anode, i)=>{
+          // Vary fail rate slightly by section (later sections slightly worse)
+          const failAdj   = Math.max(2, pattern.failEvery - Math.floor(sec/2));
+          const reviewAdj = Math.max(2, pattern.reviewEvery - Math.floor(sec/3));
+
+          const isPort = anode.id.includes('-P');
+          // Port and starboard can have different patterns
+          const offset = isPort ? 0 : 1;
+          const verdict = (i+offset)%failAdj===0 ? 'FAIL'
+                        : (i+offset)%reviewAdj===0 ? 'REVIEW REQUIRED'
+                        : 'PASS';
+
+          const f=verdict==='FAIL', rv=verdict==='REVIEW REQUIRED';
+          const ans = {
+            c1:!f, c2:!f, c3:!(f&&i%2===0),
+            c4:!(rv||f), c5:!(rv&&i%3===0),
+            c6:!(rv&&i%4===0), c7:!f
+          };
+          const reasons = verdict==='PASS' ? ['All criteria satisfied']
+                        : verdict==='FAIL' ? (i%3===0?['Remaining<50%','Core metal exposed']:['Remaining<50%'])
+                        : ['Surface condition advisory'];
+
+          demoRecs.push({
+            id:(id++).toString(),
+            anodeId:anode.id,
+            section:sec,
+            side:anode.side,
+            vessel, program,
+            inspector: i%3===0 ? inspector2 : inspector,
+            date: dates[Math.floor(i/12)%dates.length],
+            verdict, verdictReasons:reasons,
+            checklistAnswers:ans,
+            remarks: verdict==='FAIL'?'Requires replacement before next sailing':'',
+            notes:'',
+            savedAt: new Date(2026, pi*3, 15+sec+i).toISOString()
+          });
+        });
+      });
     });
   });
 
-  // Section 2 — Vessel A Program 1
-  ALL[2].forEach((anode,i)=>{
-    const verdict=i%7===0?'FAIL':i%5===0?'REVIEW REQUIRED':'PASS';
-    demoRecs.push({
-      id:(id++).toString(), anodeId:anode.id,
-      section:2, side:anode.side,
-      vessel:vessel1, program:prog1,
-      inspector:inspectors[i%inspectors.length],
-      date:dates[Math.floor(i/12)%dates.length],
-      verdict, verdictReasons:verdict==='PASS'?['All criteria satisfied']:['Advisory check needed'],
-      checklistAnswers:{c1:verdict!=='FAIL',c2:true,c3:true,c4:verdict==='PASS',c5:true,c6:true,c7:true},
-      remarks:'', notes:'', savedAt:new Date(2026,1,i+1).toISOString()
-    });
-  });
-
-  // Section 3 — Vessel A Program 1 — partial (only 30 anodes)
-  ALL[3].slice(0,30).forEach((anode,i)=>{
-    const verdict=i%9===0?'FAIL':'PASS';
-    demoRecs.push({
-      id:(id++).toString(), anodeId:anode.id,
-      section:3, side:anode.side,
-      vessel:vessel1, program:prog1,
-      inspector:inspectors[i%2],
-      date:'01 Mar 2026',
-      verdict, verdictReasons:['All criteria satisfied'],
-      checklistAnswers:{c1:true,c2:true,c3:true,c4:true,c5:true,c6:true,c7:true},
-      remarks:'', notes:'', savedAt:new Date(2026,2,i+1).toISOString()
-    });
-  });
-
-  // Vessel A Program 2 — Section 1 — compare against Program 1
-  ALL[1].forEach((anode,i)=>{
-    const verdict=i%4===0?'FAIL':i%6===0?'REVIEW REQUIRED':'PASS';
-    demoRecs.push({
-      id:(id++).toString(), anodeId:anode.id,
-      section:1, side:anode.side,
-      vessel:vessel1, program:prog2,
-      inspector:inspectors[(i+1)%inspectors.length],
-      date:'15 Apr 2026',
-      verdict, verdictReasons:verdict==='PASS'?['All criteria satisfied']:['Remaining<50%'],
-      checklistAnswers:{c1:verdict!=='FAIL',c2:verdict!=='FAIL',c3:true,c4:true,c5:true,c6:true,c7:true},
-      remarks:'', notes:'', savedAt:new Date(2026,3,15+i).toISOString()
-    });
-  });
-
-  // Vessel B Program 1 — Section 1
-  ALL[1].forEach((anode,i)=>{
-    const verdict=i%5===0?'FAIL':'PASS';
-    demoRecs.push({
-      id:(id++).toString(), anodeId:anode.id,
-      section:1, side:anode.side,
-      vessel:vessel2, program:prog1,
-      inspector:'Omar',
-      date:'01 May 2026',
-      verdict, verdictReasons:['All criteria satisfied'],
-      checklistAnswers:{c1:true,c2:true,c3:true,c4:true,c5:true,c6:true,c7:true},
-      remarks:'', notes:'', savedAt:new Date(2026,4,i+1).toISOString()
-    });
-  });
-
-  // Save all demo records
+  // Save all
   let added=0;
   for(const r of demoRecs){
     if(!inspections.find(x=>x.id===r.id)){
