@@ -1130,29 +1130,38 @@ function openRec(id){
 async function delRec(id){if(!confirm('Delete?'))return;await dbDel(id);inspections=inspections.filter(x=>x.id!==id);renderRecords();}
 
 /* ══════════════════════════════════════
-   STATS PAGE — analysis + report generation
+   STATS PAGE — hotspot analysis + comparison
    ══════════════════════════════════════ */
+let statsView='overview'; // 'overview' | 'hotspot' | 'compare'
+
 function renderStats(){
   document.getElementById('topbar-title').textContent='Analysis & Reports';
-  document.getElementById('topbar-sub').textContent='Compare vessels, programs and sections';
+  document.getElementById('topbar-sub').textContent='Failure hotspots · Vessel comparison';
 
   if(!inspections.length){
     document.getElementById('content').innerHTML=`
       <div style="text-align:center;padding:44px 20px;color:var(--text3)">
         <div style="font-size:40px;margin-bottom:12px">📊</div>
         <div style="font-size:16px;font-weight:700;margin-bottom:6px">No data yet</div>
-        <div class="muted">Complete inspections to see analysis here</div>
+        <div class="muted">Load demo data from Records tab to see analysis</div>
       </div>`;
     return;
   }
 
-  const uvs  = [...new Set(inspections.map(r=>r.vessel))];
-  const upgs  = [...new Set(inspections.map(r=>r.program))];
+  const uvs  = [...new Set(inspections.map(r=>r.vessel))].sort();
+  const upgs = [...new Set(inspections.map(r=>r.program))].sort();
 
   document.getElementById('content').innerHTML=`
+    <!-- View tabs -->
+    <div style="display:flex;gap:5px;margin-bottom:10px;overflow-x:auto">
+      <button class="sec-tab ${statsView==='overview'?'active':''}" onclick="statsView='overview';updStats()">Overview</button>
+      <button class="sec-tab ${statsView==='hotspot'?'active':''}" onclick="statsView='hotspot';updStats()">Hotspot Map</button>
+      <button class="sec-tab ${statsView==='compare'?'active':''}" onclick="statsView='compare';updStats()">Program Compare</button>
+    </div>
+
     <!-- Filters -->
     <div class="card" style="padding:10px 12px;margin-bottom:10px">
-      <div class="grid2" style="gap:8px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <select id="sfv" onchange="updStats()">
           <option value="">All vessels</option>
           ${uvs.map(v=>`<option>${v}</option>`).join('')}
@@ -1164,70 +1173,40 @@ function renderStats(){
       </div>
     </div>
 
-    <!-- KPIs -->
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:10px" id="sfkpis"></div>
+    <!-- Dynamic content area -->
+    <div id="stats-body"></div>
 
-    <!-- Section breakdown -->
-    <div class="card" style="margin-bottom:10px">
-      <div class="card-title">Pass / Fail by section</div>
-      <div id="sfsec"></div>
-    </div>
-
-    <!-- Side breakdown -->
-    <div class="card" style="margin-bottom:10px">
-      <div class="card-title">Pass / Fail by side</div>
-      <div id="sfside"></div>
-    </div>
-
-    <!-- Top fails -->
-    <div class="card" style="margin-bottom:10px">
-      <div class="card-title">Top 10 FAIL anodes</div>
-      <div id="sftop"></div>
-    </div>
-
-    <!-- Comparison table: programs vs sections -->
-    <div class="card" style="margin-bottom:10px">
-      <div class="card-title">Program comparison — FAIL count per section</div>
-      <div id="sfcomp"></div>
-    </div>
-
-    <!-- PDF Report buttons -->
-    <div class="card">
+    <!-- PDF Reports -->
+    <div class="card" style="margin-top:10px">
       <div class="card-title">Generate PDF reports</div>
       <div style="display:flex;flex-direction:column;gap:8px">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <select id="pdf-sec-vessel" style="flex:1;min-width:120px">
+          <select id="pdf-sec-vessel" style="flex:1;min-width:110px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px">
             ${uvs.map(v=>`<option>${v}</option>`).join('')}
           </select>
-          <select id="pdf-sec-prog" style="flex:1;min-width:140px">
+          <select id="pdf-sec-prog" style="flex:1;min-width:130px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px">
             ${upgs.map(p=>`<option>${p}</option>`).join('')}
           </select>
-          <select id="pdf-sec-num" style="width:120px">
+          <select id="pdf-sec-num" style="width:110px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px">
             ${SECTIONS.map(s=>`<option value="${s}">Section ${s}</option>`).join('')}
           </select>
-          <button class="btn btn-sm btn-primary" data-action="pdf-section">
-            Section report PDF
-          </button>
+          <button class="btn btn-sm btn-primary" data-action="pdf-section">Section PDF</button>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <select id="pdf-all-vessel" style="flex:1;min-width:120px">
+          <select id="pdf-all-vessel" style="flex:1;min-width:110px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px">
             ${uvs.map(v=>`<option>${v}</option>`).join('')}
           </select>
-          <select id="pdf-all-prog" style="flex:1;min-width:140px">
+          <select id="pdf-all-prog" style="flex:1;min-width:130px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px">
             ${upgs.map(p=>`<option>${p}</option>`).join('')}
           </select>
-          <button class="btn btn-sm btn-primary" data-action="pdf-overall">
-            All sections PDF
-          </button>
+          <button class="btn btn-sm btn-primary" data-action="pdf-overall">Overall PDF</button>
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <select id="pdf-cmp-vessel" style="flex:1;min-width:120px">
+          <select id="pdf-cmp-vessel" style="flex:1;min-width:110px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--rs);font-size:12px">
             <option value="">All vessels</option>
             ${uvs.map(v=>`<option>${v}</option>`).join('')}
           </select>
-          <button class="btn btn-sm btn-primary" data-action="pdf-compare">
-            Comparison PDF
-          </button>
+          <button class="btn btn-sm btn-primary" data-action="pdf-compare">Comparison PDF</button>
         </div>
       </div>
     </div>`;
@@ -1236,90 +1215,357 @@ function renderStats(){
 }
 
 function updStats(){
-  const fv = document.getElementById('sfv')?.value || '';
-  const fp = document.getElementById('sfp')?.value || '';
+  const fv   = document.getElementById('sfv')?.value  || '';
+  const fp   = document.getElementById('sfp')?.value  || '';
   const data = inspections.filter(r=>(fv?r.vessel===fv:true)&&(fp?r.program===fp:true));
-  const pass = data.filter(r=>r.verdict==='PASS').length;
-  const fail = data.filter(r=>r.verdict==='FAIL').length;
+  const body = document.getElementById('stats-body');
+  if(!body) return;
 
-  document.getElementById('sfkpis').innerHTML=`
-    <div style="background:var(--gray-lt);border-radius:var(--rs);padding:10px">
-      <div style="font-size:24px;font-weight:800">${data.length}</div>
-      <div style="font-size:10px;font-weight:600;color:var(--text3);margin-top:2px">Total</div>
-    </div>
-    <div style="background:var(--pass-bg);border-radius:var(--rs);padding:10px">
-      <div style="font-size:24px;font-weight:800;color:var(--pass)">${pass}</div>
-      <div style="font-size:10px;font-weight:600;color:var(--pass);margin-top:2px">PASS</div>
-    </div>
-    <div style="background:var(--fail-bg);border-radius:var(--rs);padding:10px">
-      <div style="font-size:24px;font-weight:800;color:var(--fail)">${fail}</div>
-      <div style="font-size:10px;font-weight:600;color:var(--fail);margin-top:2px">FAIL</div>
-    </div>`;
+  // Update tab active states
+  document.querySelectorAll('.sec-tab').forEach(b=>{
+    const v=b.textContent.toLowerCase().replace(/ /g,'');
+    b.classList.toggle('active',
+      (v==='overview'&&statsView==='overview')||
+      (v==='hotspotmap'&&statsView==='hotspot')||
+      (v==='programcompare'&&statsView==='compare')
+    );
+  });
+
+  if(statsView==='overview')  body.innerHTML = renderOverview(data, fv, fp);
+  if(statsView==='hotspot')   body.innerHTML = renderHotspot(data, fv, fp);
+  if(statsView==='compare')   body.innerHTML = renderCompare(fv);
+}
+
+/* ── VIEW 1: Overview ── */
+function renderOverview(data, fv, fp){
+  const pass  = data.filter(r=>r.verdict==='PASS').length;
+  const fail  = data.filter(r=>r.verdict==='FAIL').length;
+  const rev   = data.filter(r=>r.verdict==='REVIEW REQUIRED').length;
+  const total = data.length;
+  const failPct = total ? Math.round(fail/total*100) : 0;
 
   const mx = Math.max(...SECTIONS.map(s=>data.filter(r=>r.section==s).length), 1);
-  document.getElementById('sfsec').innerHTML = SECTIONS.map(s=>{
+
+  const secBars = SECTIONS.map(s=>{
     const sd=data.filter(r=>r.section==s);
     const p=sd.filter(r=>r.verdict==='PASS').length;
     const f=sd.filter(r=>r.verdict==='FAIL').length;
-    const pw=Math.round(p/mx*100), fw=Math.round(f/mx*100);
+    const r=sd.filter(r=>r.verdict==='REVIEW REQUIRED').length;
+    const pw=Math.round(p/mx*100), fw=Math.round(f/mx*100), rw=Math.round(r/mx*100);
     return`<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
       <div style="width:68px;font-size:11px;font-weight:700;color:var(--text2)">Section ${s}</div>
       <div style="flex:1;height:22px;background:var(--gray-lt);border-radius:4px;overflow:hidden;display:flex">
-        <div style="background:var(--pass);width:${pw}%;display:flex;align-items:center;justify-content:flex-end;padding-right:3px">${p?`<span style="font-size:9px;font-weight:800;color:#fff">${p}</span>`:''}</div>
-        <div style="background:var(--fail);width:${fw}%;display:flex;align-items:center;padding-left:3px">${f?`<span style="font-size:9px;font-weight:800;color:#fff">${f}</span>`:''}</div>
+        <div style="background:var(--pass);width:${pw}%;display:flex;align-items:center;justify-content:flex-end;padding-right:3px">
+          ${p?`<span style="font-size:9px;font-weight:800;color:#fff">${p}</span>`:''}
+        </div>
+        <div style="background:var(--fail);width:${fw}%;display:flex;align-items:center;padding-left:3px">
+          ${f?`<span style="font-size:9px;font-weight:800;color:#fff">${f}</span>`:''}
+        </div>
+        <div style="background:var(--warn);width:${rw}%;"></div>
       </div>
       <div style="width:36px;font-size:10px;color:var(--text3);font-weight:600;text-align:right">${sd.length}</div>
     </div>`;
   }).join('');
 
-  const sideEl = document.getElementById('sfside');
-  sideEl.innerHTML = '';
-  ['PORT','STARBOARD'].forEach(side=>{
-    const sd = data.filter(r=>r.side===side || r.anodeId?.includes(side==='PORT'?'-P':'-S'));
-    const p=sd.filter(r=>r.verdict==='PASS').length;
-    const f=sd.filter(r=>r.verdict==='FAIL').length;
-    sideEl.innerHTML += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
-      <div style="width:80px;font-size:11px;font-weight:700;color:var(--text2)">${side}</div>
-      <div style="flex:1;height:22px;background:var(--gray-lt);border-radius:4px;overflow:hidden;display:flex">
-        <div style="background:var(--pass);width:${sd.length?Math.round(p/sd.length*100):0}%;display:flex;align-items:center;justify-content:flex-end;padding-right:3px">${p?`<span style="font-size:9px;font-weight:800;color:#fff">${p}</span>`:''}</div>
-        <div style="background:var(--fail);width:${sd.length?Math.round(f/sd.length*100):0}%;display:flex;align-items:center;padding-left:3px">${f?`<span style="font-size:9px;font-weight:800;color:#fff">${f}</span>`:''}</div>
-      </div>
-      <div style="width:36px;font-size:10px;color:var(--text3);font-weight:600;text-align:right">${sd.length}</div>
-    </div>`;
-  });
-
+  // Top 10 fail anodes
   const fm={};
   data.filter(r=>r.verdict==='FAIL').forEach(r=>{fm[r.anodeId]=(fm[r.anodeId]||0)+1;});
-  const top = Object.entries(fm).sort((a,b)=>b[1]-a[1]).slice(0,10);
-  document.getElementById('sftop').innerHTML = top.length
-    ? top.map(([id,cnt])=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:0.5px solid var(--border);font-size:13px">
-        <span style="font-weight:700;min-width:80px">${id}</span>
+  const top=Object.entries(fm).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const topHtml = top.length
+    ? top.map(([id,cnt])=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:0.5px solid var(--border);font-size:12px">
+        <span style="font-weight:700;min-width:80px;color:var(--navy)">${id}</span>
         <div style="flex:1;background:var(--gray-lt);border-radius:3px;height:8px;overflow:hidden">
           <div style="background:var(--fail);width:${Math.round(cnt/top[0][1]*100)}%;height:100%;border-radius:3px"></div>
         </div>
-        <span style="font-weight:700;color:var(--fail);min-width:40px;text-align:right">${cnt} FAIL</span>
+        <span style="font-weight:700;color:var(--fail);min-width:50px;text-align:right">${cnt} FAIL</span>
       </div>`).join('')
     : '<div class="muted" style="padding:12px;text-align:center">No fails recorded</div>';
 
-  // Comparison table: rows = sections, cols = programs
-  const progs = [...new Set(inspections.map(r=>r.program))];
-  const compEl = document.getElementById('sfcomp');
-  if(progs.length < 2){ compEl.innerHTML='<div class="muted" style="padding:12px">Inspect with at least 2 programs to see comparison</div>'; return; }
-  const th = s=>`<th style="padding:6px 10px;font-size:11px;font-weight:700;color:var(--text2);border-bottom:1.5px solid var(--border-md);text-align:center;white-space:nowrap">${s}</th>`;
-  const td = (s,col='')=>`<td style="padding:6px 10px;font-size:12px;text-align:center;border-bottom:0.5px solid var(--border);${col}">${s}</td>`;
-  compEl.innerHTML=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
-    <thead><tr>${th('Section')}${progs.map(p=>th(p)).join('')}</tr></thead>
-    <tbody>${SECTIONS.map((s,i)=>`<tr style="${i%2?'background:var(--gray-lt)':''}">
-      ${td(`<b>Section ${s}</b>`,'font-weight:700')}
-      ${progs.map(p=>{
-        const sd=data.filter(r=>r.section==s&&r.program===p);
-        const f=sd.filter(r=>r.verdict==='FAIL').length;
-        const pa=sd.filter(r=>r.verdict==='PASS').length;
-        if(!sd.length) return td('—','color:var(--text3)');
-        return td(`<span style="color:var(--fail);font-weight:700">${f}F</span> / <span style="color:var(--pass);font-weight:700">${pa}P</span>`);
+  // Side breakdown
+  const sideBars = ['PORT','STARBOARD'].map(side=>{
+    const sd=data.filter(r=>r.side===side||r.anodeId?.includes(side==='PORT'?'-P':'-S'));
+    const p=sd.filter(r=>r.verdict==='PASS').length;
+    const f=sd.filter(r=>r.verdict==='FAIL').length;
+    return`<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
+      <div style="width:80px;font-size:11px;font-weight:700;color:var(--text2)">${side}</div>
+      <div style="flex:1;height:22px;background:var(--gray-lt);border-radius:4px;overflow:hidden;display:flex">
+        <div style="background:var(--pass);width:${sd.length?Math.round(p/sd.length*100):0}%;display:flex;align-items:center;justify-content:flex-end;padding-right:3px">
+          ${p?`<span style="font-size:9px;font-weight:800;color:#fff">${p}</span>`:''}
+        </div>
+        <div style="background:var(--fail);width:${sd.length?Math.round(f/sd.length*100):0}%;display:flex;align-items:center;padding-left:3px">
+          ${f?`<span style="font-size:9px;font-weight:800;color:#fff">${f}</span>`:''}
+        </div>
+      </div>
+      <div style="width:36px;font-size:10px;color:var(--text3);font-weight:600;text-align:right">${sd.length}</div>
+    </div>`;
+  }).join('');
+
+  return`
+    <!-- KPIs -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:10px">
+      <div style="background:var(--gray-lt);border-radius:var(--rs);padding:10px;text-align:center">
+        <div style="font-size:22px;font-weight:800">${total}</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:2px">Total</div>
+      </div>
+      <div style="background:var(--pass-bg);border-radius:var(--rs);padding:10px;text-align:center">
+        <div style="font-size:22px;font-weight:800;color:var(--pass)">${pass}</div>
+        <div style="font-size:10px;color:var(--pass);margin-top:2px">PASS</div>
+      </div>
+      <div style="background:var(--fail-bg);border-radius:var(--rs);padding:10px;text-align:center">
+        <div style="font-size:22px;font-weight:800;color:var(--fail)">${fail}</div>
+        <div style="font-size:10px;color:var(--fail);margin-top:2px">FAIL</div>
+      </div>
+      <div style="background:var(--warn-bg);border-radius:var(--rs);padding:10px;text-align:center">
+        <div style="font-size:22px;font-weight:800;color:var(--warn)">${failPct}%</div>
+        <div style="font-size:10px;color:var(--warn);margin-top:2px">Fail rate</div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Pass / Fail by section</div>${secBars}
+    </div>
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Pass / Fail by side</div>${sideBars}
+    </div>
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-title">Top 10 FAIL anodes</div>${topHtml}
+    </div>`;
+}
+
+/* ── VIEW 2: Hotspot Map ── */
+function renderHotspot(data, fv, fp){
+  // Build fail count per anode across all sections
+  const failMap={}, totalMap={};
+  data.forEach(r=>{
+    totalMap[r.anodeId]=(totalMap[r.anodeId]||0)+1;
+    if(r.verdict==='FAIL') failMap[r.anodeId]=(failMap[r.anodeId]||0)+1;
+  });
+
+  const maxFail = Math.max(...Object.values(failMap), 1);
+
+  // Heat colour: white → yellow → orange → red based on fail count
+  function heatCol(id){
+    const f = failMap[id] || 0;
+    const t = totalMap[id] || 0;
+    if(!t) return {f:'rgba(255,255,255,0.05)', st:'rgba(200,200,200,0.3)', lbl:'#ccc'};
+    const rate = f/t;
+    if(rate===0)    return {f:'rgba(234,243,222,0.8)', st:'#97C459', lbl:'#27500A'};
+    if(rate<0.25)   return {f:'rgba(255,237,180,0.85)', st:'#E8A800', lbl:'#7a5500'};
+    if(rate<0.5)    return {f:'rgba(255,190,100,0.85)', st:'#E06000', lbl:'#7a3000'};
+    if(rate<0.75)   return {f:'rgba(255,140,80,0.88)', st:'#CC3300', lbl:'#660000'};
+    return           {f:'rgba(252,80,80,0.9)',  st:'#CC0000', lbl:'#660000'};
+  }
+
+  // Build hotspot SVG for selected section
+  const [hotSec, setHotSec] = [parseInt(document.getElementById('hot-sec-sel')?.value||'1'), null];
+
+  function hotSpot(cx, cy, w, h, id){
+    const {f,st,lbl}=heatCol(id);
+    const off=calibrateOffsets[id]||{dx:0,dy:0,dw:0,dh:0};
+    const rx=cx+off.dx, ry=cy+off.dy;
+    const rw=(w+(off.dw||0))*mapBoxScale;
+    const rh=(h+(off.dh||0))*mapBoxScale;
+    const fc=failMap[id]||0;
+    const tc=totalMap[id]||0;
+    const label=id.split('-')[1];
+    return`<g>
+      <rect x="${rx-rw/2}" y="${ry-rh/2}" width="${rw}" height="${rh}" rx="3" fill="${f}" stroke="${st}" stroke-width="2"/>
+      <text x="${rx}" y="${ry+1}" text-anchor="middle" dominant-baseline="central"
+            font-size="${mapFontSize}" font-weight="700" fill="${lbl}" font-family="sans-serif">${label}</text>
+      ${fc>0?`<text x="${rx}" y="${ry-rh/2-3}" text-anchor="middle" font-size="7" fill="${st}" font-family="sans-serif" font-weight="800">${fc}F</text>`:''}
+    </g>`;
+  }
+
+  const sec = parseInt(document.getElementById('hot-sec-sel')?.value||'1');
+  const an=ALL[sec], port=an.slice(0,30), stbd=an.slice(30);
+  const NW=46,NH=34,KW=44,KH=28;
+  let svg='';
+  [115,330,550,720,940,1085].forEach((cx,i)=>{ svg+=hotSpot(cx,145,NW,NH,port[i].id); });
+  svg+=hotSpot(115,340,NH,NW,port[6].id); svg+=hotSpot(1085,340,NH,NW,port[7].id);
+  [280,490,700,910].forEach((cx,i)=>{ svg+=hotSpot(cx,490,NW,NH,port[8+i].id); svg+=hotSpot(cx,570,NW,NH,port[12+i].id); });
+  svg+=hotSpot(115,580,NH,NW,port[16].id); svg+=hotSpot(1085,580,NH,NW,port[17].id);
+  [...Array(12)].forEach((_,i)=>{ svg+=hotSpot(115+i*(970/11),625,KW,KH,port[18+i].id); });
+  [115,330,550,720,940,1085].forEach((cx,i)=>{ svg+=hotSpot(cx,1165,NW,NH,stbd[i].id); });
+  svg+=hotSpot(115,960,NH,NW,stbd[6].id); svg+=hotSpot(1085,960,NH,NW,stbd[7].id);
+  [280,490,700,910].forEach((cx,i)=>{ svg+=hotSpot(cx,825,NW,NH,stbd[8+i].id); svg+=hotSpot(cx,745,NW,NH,stbd[12+i].id); });
+  svg+=hotSpot(115,730,NH,NW,stbd[16].id); svg+=hotSpot(1085,730,NH,NW,stbd[17].id);
+  [...Array(12)].forEach((_,i)=>{ svg+=hotSpot(115+i*(970/11),690,KW,KH,stbd[18+i].id); });
+
+  const totalFails=Object.values(failMap).reduce((a,b)=>a+b,0);
+  const worstAnodes=Object.entries(failMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  return`
+    <!-- Heat legend -->
+    <div class="card" style="padding:10px 14px;margin-bottom:8px">
+      <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px">Failure heat legend</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11px">
+        <span style="display:flex;align-items:center;gap:3px"><span style="width:14px;height:14px;border-radius:2px;background:rgba(234,243,222,0.8);border:1px solid #97C459;display:inline-block"></span>0%</span>
+        <span style="display:flex;align-items:center;gap:3px"><span style="width:14px;height:14px;border-radius:2px;background:rgba(255,237,180,0.85);border:1px solid #E8A800;display:inline-block"></span>&lt;25%</span>
+        <span style="display:flex;align-items:center;gap:3px"><span style="width:14px;height:14px;border-radius:2px;background:rgba(255,190,100,0.85);border:1px solid #E06000;display:inline-block"></span>&lt;50%</span>
+        <span style="display:flex;align-items:center;gap:3px"><span style="width:14px;height:14px;border-radius:2px;background:rgba(255,140,80,0.88);border:1px solid #CC3300;display:inline-block"></span>&lt;75%</span>
+        <span style="display:flex;align-items:center;gap:3px"><span style="width:14px;height:14px;border-radius:2px;background:rgba(252,80,80,0.9);border:1px solid #CC0000;display:inline-block"></span>≥75%</span>
+        <span style="color:var(--text3);margin-left:4px">= % of inspections that failed</span>
+      </div>
+    </div>
+
+    <!-- Section selector for hotspot -->
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <select id="hot-sec-sel" onchange="updStats()"
+        style="padding:6px 10px;border:1.5px solid var(--navy);border-radius:20px;background:var(--white);
+               font-size:12px;font-weight:700;color:var(--navy);appearance:none;padding-right:24px;
+               background-image:url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2210%22 height=%226%22%3E%3Cpath d=%22M1 1l4 4 4-4%22 stroke=%22%230C447C%22 stroke-width=%221.5%22 fill=%22none%22/%3E%3C/svg%3E');
+               background-repeat:no-repeat;background-position:right 8px center">
+        ${SECTIONS.map(s=>`<option value="${s}" ${s==sec?'selected':''}>Section ${s}</option>`).join('')}
+      </select>
+      <span style="font-size:12px;color:var(--text2)">${totalFails} total fails across ${Object.keys(failMap).length} anodes</span>
+    </div>
+
+    <!-- Hotspot map -->
+    <div style="background:var(--gray-lt);border-radius:var(--rs);overflow:hidden;margin-bottom:10px">
+      <div style="position:relative;display:inline-block;width:100%">
+        <img src="assets/keel_section.png" style="width:100%;display:block;user-select:none">
+        <svg viewBox="0 0 1200 1314" style="position:absolute;top:0;left:0;width:100%;height:100%">
+          ${svg}
+        </svg>
+      </div>
+    </div>
+
+    <!-- Worst anodes -->
+    ${worstAnodes.length?`
+    <div class="card">
+      <div class="card-title">Most failed anodes — Section ${sec}</div>
+      ${worstAnodes.map(([id,cnt])=>{
+        const tot=totalMap[id]||1;
+        const rate=Math.round(cnt/tot*100);
+        return`<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:0.5px solid var(--border)">
+          <span style="font-weight:700;min-width:80px;color:var(--navy);font-size:13px">${id}</span>
+          <div style="flex:1">
+            <div style="height:8px;background:var(--gray-lt);border-radius:4px;overflow:hidden">
+              <div style="background:${rate>=75?'#CC0000':rate>=50?'#CC3300':rate>=25?'#E06000':'#E8A800'};width:${rate}%;height:100%;border-radius:4px"></div>
+            </div>
+          </div>
+          <span style="font-size:12px;font-weight:700;color:var(--fail);min-width:70px;text-align:right">${cnt}/${tot} (${rate}%)</span>
+        </div>`;
       }).join('')}
-    </tr>`).join('')}</tbody>
-  </table></div>`;
+    </div>`:''}`;
+}
+
+/* ── VIEW 3: Program Comparison ── */
+function renderCompare(fv){
+  const vessels = fv ? [fv] : [...new Set(inspections.map(r=>r.vessel))].sort();
+  const progs   = [...new Set(inspections.map(r=>r.program))].sort();
+
+  if(progs.length<2){
+    return`<div class="card"><div class="muted" style="padding:14px;text-align:center">Need at least 2 programs to compare</div></div>`;
+  }
+
+  // ── Per-vessel comparison cards ──────────────────────────────────
+  const vesselCards = vessels.map(vessel=>{
+    // Fail rate per program per section for this vessel
+    const progSecs = progs.map(prog=>{
+      return {
+        prog,
+        sections: SECTIONS.map(s=>{
+          const recs = inspections.filter(r=>r.vessel===vessel&&r.program===prog&&r.section==s);
+          const fails = recs.filter(r=>r.verdict==='FAIL').length;
+          return {total:recs.length, fails, rate:recs.length?Math.round(fails/recs.length*100):null};
+        }),
+        total: inspections.filter(r=>r.vessel===vessel&&r.program===prog).length,
+        fails: inspections.filter(r=>r.vessel===vessel&&r.program===prog&&r.verdict==='FAIL').length,
+      };
+    });
+
+    // Overall vessel fail rate trend across programs
+    const trendBars = progSecs.map(ps=>{
+      const rate = ps.total ? Math.round(ps.fails/ps.total*100) : 0;
+      const col  = rate>=25?'var(--fail)':rate>=10?'var(--warn)':'var(--pass)';
+      return`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px">
+        <div style="font-size:14px;font-weight:800;color:${col}">${rate}%</div>
+        <div style="width:100%;height:40px;background:var(--gray-lt);border-radius:4px;overflow:hidden;display:flex;align-items:flex-end">
+          <div style="width:100%;background:${col};height:${Math.max(rate,2)}%;border-radius:4px;transition:.3s"></div>
+        </div>
+        <div style="font-size:9px;color:var(--text3);text-align:center;white-space:nowrap">${ps.prog.replace('Maintenance Program ','P')}</div>
+      </div>`;
+    }).join('');
+
+    // Section × Program grid
+    const gridHeader = `<tr><th style="padding:5px 8px;background:var(--navy);color:#fff;font-size:10px;text-align:left">Section</th>${progs.map(p=>`<th style="padding:5px 8px;background:var(--navy);color:#fff;font-size:10px;text-align:center;white-space:nowrap">${p.replace('Maintenance Program ','P')}</th>`).join('')}</tr>`;
+
+    const gridRows = SECTIONS.map((s,i)=>{
+      const cells = progs.map(prog=>{
+        const recs=inspections.filter(r=>r.vessel===vessel&&r.program===prog&&r.section==s);
+        if(!recs.length) return`<td style="padding:5px 8px;text-align:center;font-size:11px;color:var(--text3);${i%2?'background:var(--gray-lt)':''}">—</td>`;
+        const f=recs.filter(r=>r.verdict==='FAIL').length;
+        const p=recs.filter(r=>r.verdict==='PASS').length;
+        const rate=Math.round(f/recs.length*100);
+        const bg=rate>=25?'rgba(252,235,235,0.6)':rate>=10?'rgba(250,238,218,0.6)':'rgba(234,243,222,0.4)';
+        const col=rate>=25?'var(--fail)':rate>=10?'var(--warn)':'var(--pass)';
+        return`<td style="padding:5px 8px;text-align:center;font-size:11px;background:${i%2?'rgba(241,239,232,0.5)':'white'};${f>0?'background:'+bg:''}">
+          <span style="font-weight:700;color:${col}">${rate}%</span>
+          <div style="font-size:9px;color:var(--text3)">${f}F/${p}P</div>
+        </td>`;
+      }).join('');
+      return`<tr><td style="padding:5px 8px;font-weight:700;font-size:11px;${i%2?'background:var(--gray-lt)':''}">S${s}</td>${cells}</tr>`;
+    }).join('');
+
+    return`
+    <div class="card" style="margin-bottom:12px">
+      <div style="font-size:14px;font-weight:800;color:var(--navy);margin-bottom:10px">${vessel}</div>
+
+      <!-- Fail rate trend bars per program -->
+      <div style="font-size:11px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Fail rate by program</div>
+      <div style="display:flex;gap:6px;align-items:flex-end;margin-bottom:12px;height:80px">
+        ${trendBars}
+      </div>
+
+      <!-- Section × Program grid -->
+      <div style="font-size:11px;font-weight:700;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em">Section breakdown</div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>${gridHeader}</thead>
+          <tbody>${gridRows}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }).join('');
+
+  // ── Cross-vessel summary table ────────────────────────────────────
+  const crossHeader = `<tr><th style="padding:5px 8px;background:var(--navy);color:#fff;font-size:10px;text-align:left">Vessel</th>${progs.map(p=>`<th style="padding:5px 8px;background:var(--navy);color:#fff;font-size:10px;text-align:center;white-space:nowrap">${p.replace('Maintenance Program ','P')}</th>`).join('')}<th style="padding:5px 8px;background:var(--navy);color:#fff;font-size:10px;text-align:center">Trend</th></tr>`;
+
+  const crossRows = vessels.map((v,i)=>{
+    const cells = progs.map(p=>{
+      const recs=inspections.filter(r=>r.vessel===v&&r.program===p);
+      if(!recs.length) return`<td style="text-align:center;padding:5px 8px;color:var(--text3);${i%2?'background:var(--gray-lt)':''}">—</td>`;
+      const f=recs.filter(r=>r.verdict==='FAIL').length;
+      const rate=Math.round(f/recs.length*100);
+      const col=rate>=25?'var(--fail)':rate>=10?'var(--warn)':'var(--pass)';
+      return`<td style="text-align:center;padding:5px 8px;font-weight:700;font-size:12px;color:${col};${i%2?'background:var(--gray-lt)':''}">${rate}%</td>`;
+    });
+    // Trend: compare first and last program
+    const rates=progs.map(p=>{
+      const r=inspections.filter(x=>x.vessel===v&&x.program===p);
+      return r.length?Math.round(r.filter(x=>x.verdict==='FAIL').length/r.length*100):null;
+    }).filter(x=>x!==null);
+    const trend = rates.length>=2
+      ? (rates[rates.length-1]<rates[0]?'📉 Improving':rates[rates.length-1]>rates[0]?'📈 Worsening':'➡ Stable')
+      : '—';
+    return`<tr><td style="padding:5px 8px;font-weight:700;font-size:12px;${i%2?'background:var(--gray-lt)':''}">${v}</td>${cells.join('')}<td style="text-align:center;padding:5px 8px;font-size:11px;${i%2?'background:var(--gray-lt)':''}">${trend}</td></tr>`;
+  }).join('');
+
+  return`
+    <!-- Cross-vessel summary -->
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">Vessel × Program — Fail rate summary</div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>${crossHeader}</thead>
+          <tbody>${crossRows}</tbody>
+        </table>
+      </div>
+      <div style="font-size:10px;color:var(--text3);margin-top:8px">% = fail rate per program · Trend = first vs last program</div>
+    </div>
+
+    <!-- Per-vessel detail -->
+    ${vesselCards}`;
 }
 
 /* ══════════ PRINT / PDF ══════════
